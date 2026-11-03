@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ArrowRight,
   Check,
@@ -780,6 +781,243 @@ export function BrowserPreview({ project, onPick }: { project: Project; onPick: 
           const props = { ref, src, preload: preload || undefined, className: 'min-h-0 flex-1 bg-white', partition: 'persist:aihub-preview' } as Record<string, unknown>
           return <webview {...(props as React.HTMLAttributes<HTMLElement>)} />
         })()}
+    </div>
+  )
+}
+
+// ───────────────────────────── Image preview ─────────────────────────────
+
+/** Thumbnail of an attached image; click to see it full size. */
+export function ImageThumb({ path, size = 28, label }: { path: string; size?: number; label?: string }): React.JSX.Element {
+  const { data: src } = useData(() => api.attachments.readImage(path).catch(() => ''), [path])
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => src && setOpen(true)}
+        className="shrink-0 cursor-zoom-in overflow-hidden rounded-md border border-white/[0.12] bg-black/30"
+        style={{ width: size, height: size }}
+        title={label ?? path}
+      >
+        {src ? <img src={src} alt={label ?? 'attachment'} className="size-full object-cover" /> : <span className="block size-full animate-pulse bg-white/[0.06]" />}
+      </button>
+      {open &&
+        src &&
+        createPortal(
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/75 p-8 backdrop-blur-sm" onMouseDown={() => setOpen(false)}>
+          <div className="pop-in flex max-h-full max-w-full flex-col items-center gap-2" onMouseDown={(e) => e.stopPropagation()}>
+            <img src={src} alt={label ?? 'attachment'} className="max-h-[80vh] max-w-[88vw] rounded-xl border border-white/[0.12] object-contain shadow-2xl" />
+            <div className="flex items-center gap-2 text-[12px] text-zinc-300">
+              <span className="max-w-[60vw] truncate font-mono">{label ?? path}</span>
+              <button type="button" className="btn h-7 px-2.5 text-[11.5px]" onClick={() => api.app.openPath(path)}>
+                <ExternalLink size={11} /> Open
+              </button>
+              <button type="button" className="btn h-7 px-2.5 text-[11.5px]" onClick={() => setOpen(false)}>
+                <X size={11} /> Close
+              </button>
+            </div>
+          </div>
+        </div>,
+          document.body
+        )}
+    </>
+  )
+}
+
+// ───────────────────────────── Skills manager ─────────────────────────────
+
+const SKILL_TARGETS: { id: CliId; label: string }[] = [
+  { id: 'claude', label: 'Claude' },
+  { id: 'agy', label: 'Antigravity' },
+  { id: 'codex', label: 'Codex' }
+]
+
+export function SkillsModal({ projectId, clis, onClose }: { projectId?: number; clis: CliSubscriptionStatus[]; onClose: () => void }): React.JSX.Element {
+  const { data: skills, reload } = useData(() => api.skills.list(projectId), [projectId])
+  const installedClis = clis.filter((c) => c.installed).map((c) => c.id)
+  const [filter, setFilter] = useState('')
+  const [url, setUrl] = useState('')
+  const [targets, setTargets] = useState<CliId[]>(SKILL_TARGETS.map((t) => t.id).filter((id) => installedClis.includes(id)))
+  const [busy, setBusy] = useState(false)
+  const [viewing, setViewing] = useState<{ name: string; text: string } | null>(null)
+  const list = (skills ?? []).filter((k) => !filter || `${k.name} ${k.description}`.toLowerCase().includes(filter.toLowerCase()))
+
+  const install = async (): Promise<void> => {
+    setBusy(true)
+    const r = await act(api.skills.install(url, targets))
+    setBusy(false)
+    if (r) {
+      toast(`Installed ${r.installed.join(', ')} for ${r.into.join(', ')}`)
+      setUrl('')
+      reload()
+    }
+  }
+
+  return (
+    <Modal title={<span className="flex items-center gap-2"><Plus size={15} className="text-amber-300" /> Skills</span>} width="max-w-3xl" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="card space-y-2.5 p-3.5">
+          <div className="eyebrow">Install from a link</div>
+          <div className="flex gap-2">
+            <input
+              className="input font-mono text-[12px]"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && url.trim() && !busy && install()}
+              placeholder="https://github.com/owner/repo/tree/main/skills/my-skill  ·  or a SKILL.md / .zip link"
+            />
+            <button type="button" className="btn btn-primary h-9" disabled={busy || !url.trim() || !targets.length} onClick={install}>
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Install
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="label mb-0 mr-1">Install for</span>
+            {SKILL_TARGETS.filter((t) => installedClis.includes(t.id)).map((t) => {
+              const on = targets.includes(t.id)
+              return (
+                <button key={t.id} type="button" className={cx('chip h-6 px-2 text-[11px]', on && 'chip-active')} onClick={() => setTargets(on ? targets.filter((x) => x !== t.id) : [...targets, t.id])}>
+                  {on && <Check size={10} />} {t.label}
+                </button>
+              )
+            })}
+          </div>
+          <p className="muted text-[11px]">
+            A repo link installs every skill in it; a folder or SKILL.md link installs just that one. Skills contain instructions (and sometimes scripts) the AI will follow, so only install from sources you trust.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input className="input h-8 text-[12.5px]" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={`Filter ${skills?.length ?? 0} skills…`} />
+          <button type="button" className="btn btn-ghost btn-icon h-8 w-8" onClick={reload} title="Rescan skill folders">
+            <RefreshCw size={13} />
+          </button>
+        </div>
+
+        <div className="card max-h-[44vh] divide-y divide-white/[0.06] overflow-y-auto">
+          {!list.length && <p className="muted p-6 text-center text-[12.5px]">{skills ? 'No skills found.' : 'Scanning…'}</p>}
+          {list.map((k) => (
+            <div key={k.path} className="flex items-start gap-3 px-4 py-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[13px] font-medium text-zinc-100">/{k.name}</span>
+                  {k.scope === 'project' && <span className="rounded bg-sky-500/15 px-1.5 py-0.2 text-[10px] text-sky-300">project</span>}
+                  {k.native.map((n) => (
+                    <span key={n} className="rounded bg-white/[0.07] px-1.5 py-0.2 text-[10px] text-zinc-400">
+                      {n}
+                    </span>
+                  ))}
+                </div>
+                {k.description && <p className="muted mt-0.5 line-clamp-2 text-[11.5px]">{k.description}</p>}
+              </div>
+              <button type="button" className="btn btn-ghost h-7 px-2 text-[11px]" onClick={() => api.skills.read(k.path).then((text) => setViewing({ name: k.name, text }))}>
+                View
+              </button>
+              <button type="button" className="btn btn-ghost btn-icon h-7 w-7" title="Open folder" onClick={() => api.app.openPath(k.path.replace(/[\\/]SKILL\.md$/i, ''))}>
+                <ExternalLink size={12} />
+              </button>
+              {k.scope === 'user' && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-icon btn-danger h-7 w-7"
+                  title="Remove this skill folder"
+                  onClick={() => confirmAction(`Delete the skill folder for /${k.name}?\n${k.path}`) && act(api.skills.remove(k.path), 'Skill removed').then(() => reload())}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      {viewing && (
+        <Modal title={`/${viewing.name} · SKILL.md`} width="max-w-3xl" onClose={() => setViewing(null)}>
+          <pre className="selectable max-h-[65vh] overflow-auto whitespace-pre-wrap rounded-lg bg-black/40 p-3 font-mono text-[12px] leading-relaxed text-zinc-200">{viewing.text}</pre>
+        </Modal>
+      )}
+    </Modal>
+  )
+}
+
+// ───────────────────────────── Compare picker ─────────────────────────────
+
+/** Readable, grouped picker for the second AI in a compare run (replaces the native dropdown). */
+export function ComparePicker({
+  clis,
+  value,
+  onChange
+}: {
+  clis: CliSubscriptionStatus[]
+  value: { cli: CliId; model: string } | null
+  onChange: (v: { cli: CliId; model: string } | null) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [open])
+  const current = value ? clis.find((c) => c.id === value.cli)?.models.find((m) => m.id === value.model) : null
+  return (
+    <div ref={ref} className="relative ml-auto mr-2">
+      <button
+        type="button"
+        className={cx('chip h-6 gap-1 px-2 text-[11px]', value && 'chip-active')}
+        onClick={() => setOpen(!open)}
+        title="Run the same prompt on a second AI at the same time (each on its own branch) and compare"
+      >
+        {value ? (
+          <>
+            <CliAvatar cli={value.cli} size={11} /> vs {current?.name ?? value.model}
+            <span
+              role="button"
+              tabIndex={0}
+              className="ml-0.5 rounded p-0.5 hover:bg-white/[0.15]"
+              onClick={(e) => (e.stopPropagation(), onChange(null))}
+              onKeyDown={(e) => e.key === 'Enter' && onChange(null)}
+            >
+              <X size={10} />
+            </span>
+          </>
+        ) : (
+          'Compare with…'
+        )}
+      </button>
+      {open && (
+        <div className="glass-float pop-in absolute right-0 top-8 z-[80] max-h-[360px] w-[300px] overflow-y-auto rounded-xl p-1.5">
+          <div className="eyebrow px-2.5 py-1">Second AI for this prompt</div>
+          {clis
+            .filter((c) => c.authenticated)
+            .map((c) => (
+              <div key={c.id} className="py-0.5">
+                <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-0.5 text-[11px] font-semibold text-zinc-400">
+                  <CliAvatar cli={c.id} size={12} /> {c.shortName}
+                </div>
+                {c.models.map((m) => {
+                  const on = value?.cli === c.id && value.model === m.id
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => (onChange({ cli: c.id, model: m.id }), setOpen(false))}
+                      className={cx(
+                        'flex w-full cursor-pointer items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[12.5px] transition-colors',
+                        on ? 'bg-indigo-500/20 text-white' : 'text-zinc-200 hover:bg-white/[0.07]'
+                      )}
+                    >
+                      <span className="truncate">{m.name}</span>
+                      {on && <Check size={12} className="text-indigo-300" />}
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   )
 }

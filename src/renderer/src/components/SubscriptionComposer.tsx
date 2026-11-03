@@ -15,9 +15,7 @@ import {
   RefreshCw,
   Shield,
   Square,
-  Columns2,
   Crosshair,
-  ImageIcon,
   Terminal,
   Wand2,
   X
@@ -36,6 +34,7 @@ import type {
 import { api, toast } from '../lib/api'
 import { CliAvatar } from './CliAvatars'
 import { cx } from './ui'
+import { ComparePicker, ImageThumb } from './Workbench'
 
 /** Anything in the app (e.g. the browser preview's element picker) can attach to the visible composer. */
 export const attachToComposer = (m: MentionItem): void => {
@@ -387,31 +386,7 @@ export function SubscriptionComposer({
         </div>
 
         {onChangeCompareWith && submitMode === 'thread' && (
-          <label
-            className={cx('chip ml-auto mr-2 h-6 gap-1 px-2 text-[11px]', compareWith && 'chip-active')}
-            title="Run the same prompt on a second AI at the same time (each on its own branch) and compare"
-          >
-            <Columns2 size={11} />
-            <select
-              className="cursor-pointer bg-transparent text-[11px] outline-none"
-              value={compareWith ? `${compareWith.cli}|${compareWith.model}` : ''}
-              onChange={(e) => {
-                const [c, m] = e.target.value.split('|')
-                onChangeCompareWith(c ? { cli: c as CliId, model: m } : null)
-              }}
-            >
-              <option value="">Compare with…</option>
-              {clis
-                .filter((c) => c.authenticated)
-                .flatMap((c) =>
-                  c.models.map((m) => (
-                    <option key={`${c.id}|${m.id}`} value={`${c.id}|${m.id}`}>
-                      {c.shortName} · {m.name}
-                    </option>
-                  ))
-                )}
-            </select>
-          </label>
+          <ComparePicker clis={clis} value={compareWith ?? null} onChange={onChangeCompareWith} />
         )}
 
         {/* Switch between interactive thread & task queue */}
@@ -470,7 +445,7 @@ export function SubscriptionComposer({
                 ) : m.type === 'skill' ? (
                   <Wand2 size={12} className="text-amber-300" />
                 ) : m.type === 'image' ? (
-                  <ImageIcon size={12} className="text-sky-300" />
+                  <ImageThumb path={m.value} size={22} label={m.label} />
                 ) : m.type === 'element' ? (
                   <Crosshair size={12} className="text-indigo-300" />
                 ) : (

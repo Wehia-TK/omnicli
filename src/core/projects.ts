@@ -1,9 +1,10 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type { CheckoutMode, CliId, EffortLevel, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, TaskChanges } from '@shared/types'
 import {
   agyConversationTokens,
+  agyDeniedActions,
   agyModelExhausted,
   agyModelFamily,
   pickAgyAlternative,
@@ -478,7 +479,7 @@ const sumTokens = (u: Usage): number => (u.input_tokens ?? 0) + (u.output_tokens
 /** Launch Claude Code with real-time stream-json events, tool tracking, and live rate_limit_event capture. */
 function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy: string): void {
   const cwd = resolveWorkingDir(startTask, p)
-  const t = getTask(startTask.id)
+  const t = localizeAttachments(getTask(startTask.id), cwd)
   const exe = findCliExecutable('claude')
   if (!exe) throw new Error('Claude Code CLI is not installed or not found. Configure its path in Settings.')
 
@@ -697,10 +698,44 @@ function commitWorktreeEditsIfNeeded(t: ProjectTask, label: string): boolean {
   }
 }
 
+export const PERMISSION_BLOCKED = 'Stopped: permission needed.'
+
+/**
+ * Pasted images live in AI Hub's data folder, which sandboxed CLIs (Antigravity, Gemini) refuse to read.
+ * Copy them into the workspace's git-excluded .ai-kb/attachments folder and point the task at those copies.
+ */
+function localizeAttachments(t: ProjectTask, cwd: string): ProjectTask {
+  let items: MentionItem[] = []
+  try {
+    items = JSON.parse(t.mentions || '[]')
+  } catch {
+    return t
+  }
+  let changed = false
+  const dir = join(cwd, '.ai-kb', 'attachments')
+  const next = items.map((m) => {
+    if (m.type !== 'image' || !existsSync(m.value)) return m
+    const rel = relative(cwd, m.value)
+    if (!rel.startsWith('..') && !/^[a-z]:/i.test(rel)) return m // already inside the workspace
+    try {
+      mkdirSync(dir, { recursive: true })
+      const dest = join(dir, m.value.split(/[\\/]/).pop() || `image-${Date.now()}.png`)
+      if (!existsSync(dest)) copyFileSync(m.value, dest)
+      changed = true
+      return { ...m, value: dest }
+    } catch {
+      return m
+    }
+  })
+  if (!changed) return t
+  run('UPDATE project_tasks SET mentions = ? WHERE id = ?', JSON.stringify(next), t.id)
+  return getTask(t.id)
+}
+
 /** Launch Antigravity CLI (`agy`) or the other supported CLIs (`codex`, `gemini`, `copilot`). */
 function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: string, firstWhy: string): void {
   const cwd = resolveWorkingDir(startTask, p)
-  const t = getTask(startTask.id)
+  const t = localizeAttachments(getTask(startTask.id), cwd)
   const exe = findCliExecutable(cli)
   if (!exe) {
     throw new Error(`${cliDisplayName(cli)} CLI isn't installed. Install it or set its path in Settings.`)
@@ -946,6 +981,21 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
 
     if (getTask(t.id).run_state !== 'running') {
       // stopped by user
+    } else if (isAgy && !failed && tid.agy_conversation && tid.permission_mode !== 'bypass' && agyDeniedActions(tid.agy_conversation, startedAt).length) {
+      // Antigravity's print mode can't show a permission prompt — it silently denies and ends the turn. Say so.
+      const denied = agyDeniedActions(tid.agy_conversation, startedAt)
+      if (finalAnswer) {
+        appendLog(t.id, 'text', finalAnswer, cli, model)
+        run('UPDATE project_tasks SET result = ? WHERE id = ?', finalAnswer, t.id)
+      }
+      failRun(
+        getTask(t.id),
+        freshProj,
+        `${PERMISSION_BLOCKED} Antigravity wanted to:\n${denied
+          .slice(0, 6)
+          .map((d) => `• ${d}`)
+          .join('\n')}\nIt can't ask for approval when run from AI Hub, so these were blocked. Continue with Full Auto to allow them.`
+      )
     } else if (failed || turnedDownByLimit(false, errorText)) {
       if (turnedDownByLimit(false, failureText)) {
         if (isAgy) {
@@ -1407,7 +1457,7 @@ export const projects = {
         opts.model ?? cur.model,
         opts.effort ?? cur.effort ?? 'high',
         opts.permissionMode ?? cur.permission_mode,
-        opts.mentions ? JSON.stringify(opts.mentions) : cur.mentions,
+        opts.mentions?.length ? JSON.stringify(opts.mentions) : cur.mentions,
         id
       )
     }

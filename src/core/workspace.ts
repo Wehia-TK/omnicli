@@ -116,6 +116,16 @@ export const attachments = {
     const file = join(dir, `${Date.now()}-${safe}.${m[1].toLowerCase().replace('jpeg', 'jpg')}`)
     writeFileSync(file, Buffer.from(m[2], 'base64'))
     return file
+  },
+
+  /** Image as a data URL for previews (attachments can live anywhere on disk). */
+  readImage: (path: string): string => {
+    const ext = path.split('.').pop()?.toLowerCase() ?? ''
+    const mime: Record<string, string> = { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp', bmp: 'bmp' }
+    if (!mime[ext] || !existsSync(path)) throw new Error('Image not found')
+    const buf = readFileSync(path)
+    if (buf.length > 15 * 1024 * 1024) throw new Error('Image is too large to preview')
+    return `data:image/${mime[ext]};base64,${buf.toString('base64')}`
   }
 }
 

@@ -45,9 +45,9 @@ import type {
 import { CliAvatar, CliSpinner } from './components/CliAvatars'
 import { EmbeddedTerminal } from './components/EmbeddedTerminal'
 import { GitControls } from './components/GitControls'
-import { ApprovalCards, BrowserPreview, DiffReview, McpModal, PrButton, RulesModal, SchedulesPanel, SearchModal } from './components/Workbench'
+import { ApprovalCards, BrowserPreview, DiffReview, ImageThumb, McpModal, PrButton, RulesModal, SchedulesPanel, SearchModal, SkillsModal } from './components/Workbench'
 import { attachToComposer } from './components/SubscriptionComposer'
-import { Download, Globe, Plug, ScrollText, Search } from 'lucide-react'
+import { Download, Globe, Plug, ScrollText, Search, ShieldCheck as ShieldOk, Wand2 } from 'lucide-react'
 import { KnowledgeBaseView } from './components/KnowledgeBaseView'
 import { LiveLimitsModal, SubscriptionStatusStrip } from './components/LiveLimitsModal'
 import { SubscriptionComposer } from './components/SubscriptionComposer'
@@ -88,6 +88,7 @@ export default function App(): React.JSX.Element {
   const [showSearch, setShowSearch] = useState(false)
   const [showRules, setShowRules] = useState(false)
   const [showMcp, setShowMcp] = useState(false)
+  const [showSkills, setShowSkills] = useState(false)
   const [compareWith, setCompareWith] = useState<{ cli: CliId; model: string } | null>(null)
 
   // Theme: dark / light / follow Windows
@@ -326,6 +327,9 @@ export default function App(): React.JSX.Element {
 
           <button type="button" onClick={() => setShowSearch(true)} className="btn btn-ghost btn-icon h-7 w-7" title="Search all sessions (Ctrl+K)">
             <Search size={13} />
+          </button>
+          <button type="button" onClick={() => setShowSkills(true)} className="btn btn-ghost btn-icon h-7 w-7" title="Skills: browse yours and install from a link">
+            <Wand2 size={13} />
           </button>
           <button type="button" onClick={() => setShowMcp(true)} className="btn btn-ghost btn-icon h-7 w-7" title="MCP servers for every AI">
             <Plug size={13} />
@@ -874,6 +878,7 @@ export default function App(): React.JSX.Element {
       )}
       {showRules && currentProject && <RulesModal project={currentProject} onClose={() => setShowRules(false)} />}
       {showMcp && <McpModal clis={clis ?? []} onClose={() => setShowMcp(false)} />}
+      {showSkills && <SkillsModal projectId={currentProject?.id} clis={clis ?? []} onClose={() => setShowSkills(false)} />}
 
       {showSettingsModal && settings && (
         <SettingsModal settings={settings} onClose={() => setShowSettingsModal(false)} />
@@ -922,6 +927,13 @@ function ActiveSessionStream({
   const bottomRef = useRef<HTMLDivElement>(null)
   const busy = t.run_state === 'running'
   const activeCli = (t.runner || t.cli || 'agy') as CliId
+  const taskImages = ((): MentionItem[] => {
+    try {
+      return (JSON.parse(t.mentions || '[]') as MentionItem[]).filter((m) => m.type === 'image')
+    } catch {
+      return []
+    }
+  })()
 
   useEffect(() => {
     if (busy) {
@@ -1020,6 +1032,13 @@ function ActiveSessionStream({
           )}
 
           <PrButton task={t} />
+          {taskImages.length > 0 && (
+            <span className="flex items-center gap-1" title="Attached images">
+              {taskImages.map((m) => (
+                <ImageThumb key={m.value} path={m.value} size={26} label={m.label} />
+              ))}
+            </span>
+          )}
 
           {!busy && t.checkout_mode === 'worktree' && t.branch && (
             <button
@@ -1117,6 +1136,26 @@ function ActiveSessionStream({
           })}
 
           <ApprovalCards taskId={t.id} />
+
+          {t.run_state === 'failed' && t.error.startsWith('Stopped: permission needed.') && (
+            <div className="card flex flex-wrap items-center gap-3 border-amber-400/35 bg-amber-500/[0.07] p-3.5">
+              <span className="min-w-0 flex-1 text-[12.5px] text-amber-100">
+                {t.runner === 'agy' ? 'Antigravity' : 'The AI'} was blocked from running the actions above. Allow them by continuing this session in Full Auto.
+              </span>
+              <button
+                type="button"
+                className="btn btn-primary h-8"
+                onClick={() =>
+                  act(
+                    api.projects.reply(t.id, 'Permission granted — go ahead with the actions that were blocked and continue the task.', { permissionMode: 'bypass' }),
+                    'Continuing in Full Auto'
+                  )
+                }
+              >
+                <ShieldOk size={13} /> Allow & continue
+              </button>
+            </div>
+          )}
 
           {busy && (
             <div className="card flex items-center gap-3.5 p-4">

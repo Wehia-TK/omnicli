@@ -854,6 +854,38 @@ export function agyConversationTokens(conversationId: string, sinceMs: number): 
   return 0
 }
 
+/**
+ * Actions Antigravity's print mode refused because nobody could answer its permission prompt
+ * (reading files outside the project, running commands in Accept Edits mode, …).
+ */
+export function agyDeniedActions(conversationId: string, sinceMs: number): string[] {
+  const home = homedir()
+  for (const root of [join(home, '.gemini', 'antigravity-cli', 'brain'), join(home, '.gemini', 'antigravity', 'brain')]) {
+    const dir = join(root, conversationId, '.system_generated', 'logs')
+    const file = existsSync(join(dir, 'transcript_full.jsonl')) ? join(dir, 'transcript_full.jsonl') : join(dir, 'transcript.jsonl')
+    if (!existsSync(file)) continue
+    const out: string[] = []
+    try {
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.includes('permission check failed')) continue
+        try {
+          const o = JSON.parse(line) as { created_at?: string; error?: string }
+          if (o.created_at && Date.parse(o.created_at) < sinceMs - 2000) continue
+          const m = (o.error ?? '').match(/permission check failed for ([^"]*)"([^"]{0,160})/)
+          const what = m ? `${m[1].trim().replace(/^unsandboxed$/, 'command')}: ${m[2]}` : (o.error ?? '').split('\n')[0].slice(0, 180)
+          if (what && !out.includes(what)) out.push(what)
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return out
+  }
+  return []
+}
+
 // ───────────────────────────── Codex: live rate limits ─────────────────────────────
 
 interface CodexLive {

@@ -61,7 +61,8 @@ export const api = {
     save: (projectId: number, text: string, targets?: string[]) => call<true>('rules.save', projectId, text, targets)
   },
   attachments: {
-    saveImage: (dataUrl: string, name?: string) => call<string>('attachments.saveImage', dataUrl, name)
+    saveImage: (dataUrl: string, name?: string) => call<string>('attachments.saveImage', dataUrl, name),
+    readImage: (path: string) => call<string>('attachments.readImage', path)
   },
   history: {
     search: (query: string, projectId?: number) => call<SearchHit[]>('history.search', query, projectId),
@@ -107,7 +108,11 @@ export const api = {
     scanRepo: (projectId: number) => call<KnowledgeEntry[]>('knowledge.scanRepo', projectId)
   },
   skills: {
-    list: (projectId?: number) => call<SkillInfo[]>('skills.list', projectId)
+    list: (projectId?: number) => call<SkillInfo[]>('skills.list', projectId),
+    targets: () => call<{ cli: CliId; dir: string }[]>('skills.targets'),
+    install: (url: string, targets: CliId[]) => call<{ installed: string[]; into: CliId[] }>('skills.install', url, targets),
+    remove: (path: string) => call<true>('skills.remove', path),
+    read: (path: string) => call<string>('skills.read', path)
   },
   git: {
     status: (projectId: number) => call<GitStatusInfo>('git.status', projectId),
