@@ -4,7 +4,10 @@ import { join, relative } from 'node:path'
 import type { CheckoutMode, CliId, EffortLevel, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, TaskChanges } from '@shared/types'
 import {
   agyConversationTokens,
+  agyModelExhausted,
   agyModelFamily,
+  pickAgyAlternative,
+  refreshAgyQuota,
   findCliExecutable,
   isCliReady,
   modelsForCli,
@@ -13,8 +16,11 @@ import {
   resolveCliModelWithEffort
 } from './clis'
 import { skills } from './skills'
+import { approvalMcpConfig, cancelApprovals } from './approvals'
+import { updateGraphNow } from './graphwatch'
+import { phoneNotify } from './scheduler'
 import { all, get, notifyChanged, nowLocal, run, transaction } from './db'
-import { buildKnowledgePrompt, recordAiHandoff, syncKnowledgeToDir } from './knowledge'
+import { buildKnowledgePrompt, recordAiHandoff, syncKnowledgeToDir, withoutKbSync } from './knowledge'
 import { getSettings } from './settings'
 import { terminal } from './terminal'
 
@@ -219,7 +225,7 @@ function resolveEffortFor(t: ProjectTask, p: Project): EffortLevel {
   return ['low', 'medium', 'high', 'xhigh', 'max'].includes(e) ? e : 'medium'
 }
 
-function formatMentionsContext(mentionsRaw: string, projectFolder: string): string {
+function formatMentionsContext(mentionsRaw: string, projectFolder: string, cli: CliId = 'claude'): string {
   let items: MentionItem[] = []
   try {
     items = JSON.parse(mentionsRaw || '[]')
@@ -245,9 +251,24 @@ function formatMentionsContext(mentionsRaw: string, projectFolder: string): stri
       parts.push(`Referenced Project Context (@${m.label}): ${m.value}`)
     } else if (m.type === 'kb') {
       parts.push(`Referenced Knowledge Base Entry (@${m.label}):\n${m.value}`)
+    } else if (m.type === 'image') {
+      // Codex gets images via --image; Gemini expands @path; Claude/Antigravity open the file with their read tool
+      if (cli === 'gemini') parts.push(`Attached image: @${m.value}`)
+      else if (cli !== 'codex') parts.push(`Attached image (open and look at it before answering): ${m.value}`)
+    } else if (m.type === 'element') {
+      parts.push(`Selected element from the app preview (${m.label}):\n${m.value}`)
     }
   }
   return parts.join('\n\n')
+}
+
+/** Image paths attached to a task (for CLIs that take images as a flag). */
+function imageMentions(mentionsRaw: string): string[] {
+  try {
+    return (JSON.parse(mentionsRaw || '[]') as MentionItem[]).filter((m) => m.type === 'image' && existsSync(m.value)).map((m) => m.value)
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -285,7 +306,7 @@ export function buildFullPrompt(cli: CliId, t: ProjectTask, p: Project, ask: str
 
 function buildPromptBody(cli: CliId, t: ProjectTask, p: Project, ask: string, cwd: string): string {
   const kbBlock = buildKnowledgePrompt(p.id, cwd)
-  const mentionsBlock = formatMentionsContext(t.mentions, p.folder)
+  const mentionsBlock = formatMentionsContext(t.mentions, p.folder, cli)
   const modeNote =
     t.permission_mode === 'plan'
       ? 'PERMISSION MODE: Plan Only. Analyze, design, and explain your step-by-step plan without modifying files until approved.'
@@ -383,6 +404,8 @@ function finishRun(t: ProjectTask, p: Project, cli: CliId, model: string): void 
     `${t.title}\n${checked}${(t.result || '').replace(/\s+/g, ' ').slice(0, 140)}`,
     `projects/${p.id}/${t.id}`
   )
+  if (t.kind === 'task' || !p.auto_run) phoneNotify(`${p.name}: ${cliDisplayName(cli)} finished`, `${t.title}${checked}`)
+  if (getSettings().useGraphify && getSettings().graphifyWatch && p.folder) updateGraphNow(p.folder)
   nextInQueue(p.id)
 }
 
@@ -390,6 +413,7 @@ function failRun(t: ProjectTask, p: Project, why: string): void {
   run("UPDATE project_tasks SET run_state = 'failed', error = ? WHERE id = ?", why, t.id)
   appendLog(t.id, 'error', why, (t.runner || undefined) as CliId | undefined, t.model)
   notifier.notify(`${p.name}: stopped`, `${t.title}\n${why.slice(0, 140)}`, `projects/${p.id}/${t.id}`)
+  phoneNotify(`${p.name}: stopped`, `${t.title}\n${why.slice(0, 300)}`)
   nextInQueue(p.id)
 }
 
@@ -437,6 +461,7 @@ function nextInQueue(projectId: number): void {
   if (!next) {
     run('UPDATE projects SET auto_run = 0 WHERE id = ?', projectId)
     notifier.notify(`${p.name}: queue finished`, 'Every queued task has run. Review and merge your branches.', `projects/${projectId}`)
+    phoneNotify(`${p.name}: queue finished`, 'Every queued task has run. Review and merge your branches.')
     return
   }
   try {
@@ -461,14 +486,22 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
   const effort = resolveEffortFor(t, p)
   const { cliModelArg: model, effortArg } = resolveCliModelWithEffort('claude', baseModel, effort)
   const prompt = buildFullPrompt('claude', t, p, ask, cwd)
+  // Default = ask in AI Hub for every edit/command; Accept Edits = only commands and other risky tools ask
   const permMode =
     t.permission_mode === 'bypass'
       ? 'bypassPermissions'
       : t.permission_mode === 'plan'
         ? 'plan'
-        : 'acceptEdits'
+        : t.permission_mode === 'accept-edits'
+          ? 'acceptEdits'
+          : 'default'
 
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', permMode]
+  if (permMode === 'default' || permMode === 'acceptEdits') {
+    const cfg = approvalMcpConfig(t.id)
+    if (cfg) args.push('--mcp-config', cfg, '--permission-prompt-tool', 'mcp__aihub__approve')
+    else if (permMode === 'default') args[args.indexOf('default')] = 'acceptEdits' // bridge unavailable: old behaviour
+  }
   if (model) args.push('--model', model)
   if (effortArg) args.push('--effort', effortArg)
   if (t.session_id) args.push('--resume', t.session_id)
@@ -673,7 +706,14 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     throw new Error(`${cliDisplayName(cli)} CLI isn't installed. Install it or set its path in Settings.`)
   }
 
-  const baseModel = resolveModelFor(cli, t, p)
+  let baseModel = resolveModelFor(cli, t, p)
+  if (cli === 'agy' && getSettings().agyFamilyFallback && agyModelExhausted(baseModel)) {
+    const alt = pickAgyAlternative(baseModel, new Set([baseModel]))
+    if (alt) {
+      appendLog(t.id, 'handoff', `${baseModel} has no quota left right now — using ${alt} from another Antigravity quota group.`, 'agy', alt)
+      baseModel = alt
+    }
+  }
   const effort = resolveEffortFor(t, p)
   const { cliModelArg: model, effortArg } = resolveCliModelWithEffort(cli, baseModel, effort)
   const prompt = buildFullPrompt(cli, t, p, ask, cwd)
@@ -696,7 +736,8 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
           ? ['--dangerously-bypass-approvals-and-sandbox']
           : ['--full-auto']
     const common = ['--json', '--skip-git-repo-check', '--model', model, '-c', `model_reasoning_effort="${effortArg}"`, ...sandbox]
-    args = t.codex_thread && t.runner === 'codex' ? ['exec', 'resume', ...common, t.codex_thread, '-'] : ['exec', ...common, '-']
+    const images = imageMentions(t.mentions).flatMap((f) => ['--image', f])
+    args = t.codex_thread && t.runner === 'codex' ? ['exec', 'resume', ...common, ...images, t.codex_thread, '-'] : ['exec', ...common, ...images, '-']
     stdinPrompt = prompt
   } else if (cli === 'gemini') {
     const approval = t.permission_mode === 'plan' ? 'default' : t.permission_mode === 'bypass' ? 'yolo' : 'auto_edit'
@@ -959,7 +1000,32 @@ function executeWithCli(cli: CliId, t: ProjectTask, p: Project, ask: string, fir
 }
 
 /** Automatic Subscription Handover: when one CLI stops or hits its rate limit, hand over to the other authenticated CLI on the same branch/folder! */
+const agyTried = new Map<number, Set<string>>()
+
 function handleStoppedRun(from: CliId, t: ProjectTask, p: Project, ask: string, why: string, firstWhy: string): void {
+  // Antigravity meters model groups separately — a different group may still have quota, so try that first
+  if (from === 'agy' && getSettings().agyFamilyFallback && turnedDownByLimit(false, why)) {
+    const tried = agyTried.get(t.id) ?? new Set<string>()
+    tried.add(t.model)
+    agyTried.set(t.id, tried)
+    void refreshAgyQuota().then(() => {
+      const alt = pickAgyAlternative(t.model, tried)
+      if (!alt) {
+        agyTried.delete(t.id)
+        return handOverToOtherCli(from, getTask(t.id), getProject(p.id), ask, why, firstWhy)
+      }
+      tried.add(alt)
+      run('UPDATE project_tasks SET model = ?, cli = ? WHERE id = ?', alt, 'agy', t.id)
+      appendLog(t.id, 'handoff', `${t.model} is out of quota. Switching to ${alt} (a different Antigravity quota group) and continuing…`, 'agy', alt)
+      executeWithCli('agy', getTask(t.id), getProject(p.id), ask, firstWhy)
+    })
+    return
+  }
+  agyTried.delete(t.id)
+  handOverToOtherCli(from, t, p, ask, why, firstWhy)
+}
+
+function handOverToOtherCli(from: CliId, t: ProjectTask, p: Project, ask: string, why: string, firstWhy: string): void {
   // Only hand over to subscriptions that are installed AND signed in; Claude first, then the rest
   const fallbackOrder: CliId[] = ['claude', 'agy', 'codex', 'gemini', 'copilot']
   const to = fallbackOrder.find((c) => c !== from && isCliReady(c))
@@ -984,6 +1050,20 @@ function handleStoppedRun(from: CliId, t: ProjectTask, p: Project, ask: string, 
     `projects/${p.id}/${t.id}`
   )
   executeWithCli(to, t, p, ask, why)
+}
+
+export interface CreateRunOpts {
+  projectId: number
+  prompt: string
+  notes?: string
+  kind?: 'thread' | 'task'
+  cli: CliId
+  model: string
+  effort?: EffortLevel
+  permissionMode: PermissionMode
+  checkoutMode: CheckoutMode
+  mentions?: MentionItem[]
+  startImmediately?: boolean
 }
 
 export const projects = {
@@ -1036,6 +1116,14 @@ export const projects = {
       if (folder) syncKnowledgeToDir(id, folder)
       return getProject(id)
     })
+  },
+
+  taskInfo: (taskId: number): { projectId: number; projectName: string; title: string } | null => {
+    const r = get<{ project_id: number; name: string; title: string }>(
+      'SELECT t.project_id, p.name, t.title FROM project_tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?',
+      taskId
+    )
+    return r ? { projectId: r.project_id, projectName: r.name, title: r.title } : null
   },
 
   /** Remember the composer's last AI choice for this project (so model + effort stick between sessions). */
@@ -1100,19 +1188,72 @@ export const projects = {
     ),
 
   /** Create and immediately start an interactive session or queued task from the screenshot composer bar! */
-  createAndRun: (opts: {
-    projectId: number
-    prompt: string
-    notes?: string
-    kind?: 'thread' | 'task'
-    cli: CliId
-    model: string
-    effort?: EffortLevel
-    permissionMode: PermissionMode
-    checkoutMode: CheckoutMode
-    mentions?: MentionItem[]
-    startImmediately?: boolean
-  }): ProjectTask => {
+  /**
+   * Estimate the tokens a message will send (KB context + mentions + your text) before you press Send.
+   * Mirrors buildFullPrompt exactly, including the short form used when continuing the same CLI session.
+   */
+  estimate: (opts: { projectId: number; taskId?: number | null; cli: CliId; prompt: string; mentions?: MentionItem[] }): {
+    tokens: number
+    contextTokens: number
+    continuing: boolean
+  } => {
+    const p = getProject(opts.projectId)
+    const mentions = JSON.stringify(opts.mentions ?? [])
+    const base: ProjectTask = opts.taskId
+      ? { ...getTask(opts.taskId), mentions }
+      : ({
+          id: 0,
+          project_id: p.id,
+          kind: 'thread',
+          title: opts.prompt.split('\n')[0].slice(0, 110),
+          notes: opts.prompt.includes('\n') ? opts.prompt : '',
+          mentions,
+          permission_mode: 'default',
+          checkout_mode: 'local',
+          runner: '',
+          session_id: null,
+          agy_conversation: null,
+          codex_thread: null,
+          base_commit: null,
+          branch: null
+        } as unknown as ProjectTask)
+    const text = withoutKbSync(() => buildFullPrompt(opts.cli, base, p, opts.prompt, p.folder))
+    const kb = withoutKbSync(() => buildKnowledgePrompt(p.id))
+    const continuing = Boolean(opts.taskId) && !text.includes(kb.slice(0, 40) || '\u0000')
+    // ~3.7 chars/token for English + code is a good cross-model average
+    const toTokens = (s: string): number => Math.ceil(s.length / 3.7)
+    return { tokens: toTokens(text), contextTokens: continuing ? 0 : toTokens(kb), continuing }
+  },
+
+  /** Send the same task to two AIs at once, each on its own worktree branch, to compare results side by side. */
+  createCompare: (
+    opts: CreateRunOpts,
+    second: { cli: CliId; model: string; effort?: EffortLevel }
+  ): ProjectTask[] => {
+    const p = getProject(opts.projectId)
+    try {
+      git(p.folder, ['rev-parse', '--verify', 'HEAD'])
+    } catch {
+      throw new Error('Compare runs need a git repository with at least one commit (each AI gets its own branch). Use "Init Git repo" first.')
+    }
+    const group = `cmp-${Date.now().toString(36)}`
+    const created: ProjectTask[] = []
+    for (const side of [{ cli: opts.cli, model: opts.model, effort: opts.effort }, second]) {
+      const t = projects.createAndRun({ ...opts, ...side, kind: 'thread', checkoutMode: 'worktree', startImmediately: false })
+      run("UPDATE project_tasks SET compare_group = ?, status = 'doing' WHERE id = ?", group, t.id)
+      created.push(t)
+    }
+    for (const t of created) {
+      try {
+        projects.start(t.id, opts.prompt.trim())
+      } catch (e) {
+        failRun(getTask(t.id), p, (e as Error).message)
+      }
+    }
+    return created.map((t) => getTask(t.id))
+  },
+
+  createAndRun: (opts: CreateRunOpts): ProjectTask => {
     const text = opts.prompt.trim()
     if (!text) throw new Error('Write a prompt or task description first')
     const p = getProject(opts.projectId)
@@ -1283,6 +1424,7 @@ export const projects = {
   stop: (id: number): ProjectTask => {
     const child = running.get(id)
     run("UPDATE project_tasks SET run_state = 'failed', error = 'Stopped by user. Send a message to continue.' WHERE id = ?", id)
+    cancelApprovals(id)
     if (child) killProcess(child)
     appendLog(id, 'info', 'Stopped by user')
     return getTask(id)

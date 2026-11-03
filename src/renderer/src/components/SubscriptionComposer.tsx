@@ -15,6 +15,9 @@ import {
   RefreshCw,
   Shield,
   Square,
+  Columns2,
+  Crosshair,
+  ImageIcon,
   Terminal,
   Wand2,
   X
@@ -30,8 +33,16 @@ import type {
   Project,
   SkillInfo
 } from '@shared/types'
+import { api, toast } from '../lib/api'
 import { CliAvatar } from './CliAvatars'
 import { cx } from './ui'
+
+/** Anything in the app (e.g. the browser preview's element picker) can attach to the visible composer. */
+export const attachToComposer = (m: MentionItem): void => {
+  window.dispatchEvent(new CustomEvent('aihub-attach', { detail: m }))
+}
+
+const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n))
 
 interface SubscriptionComposerProps {
   projects: Project[]
@@ -60,6 +71,11 @@ interface SubscriptionComposerProps {
   submitMode?: 'thread' | 'task'
   onChangeSubmitMode?: (m: 'thread' | 'task') => void
   onSubmit: (prompt: string, mentions: MentionItem[], mode: 'thread' | 'task') => Promise<void>
+  /** Live token estimate for what Send will transmit */
+  estimateTaskId?: number | null
+  /** Optional second AI to run the same prompt against (compare mode) */
+  compareWith?: { cli: CliId; model: string } | null
+  onChangeCompareWith?: (v: { cli: CliId; model: string } | null) => void
 }
 
 const PERMISSION_MODES: { id: PermissionMode; label: string; desc: string }[] = [
@@ -136,7 +152,10 @@ export function SubscriptionComposer({
   placeholder = 'Ask anything, build a feature, or queue a task across your subscriptions…',
   submitMode = 'thread',
   onChangeSubmitMode,
-  onSubmit
+  onSubmit,
+  estimateTaskId,
+  compareWith,
+  onChangeCompareWith
 }: SubscriptionComposerProps): React.JSX.Element {
   const [text, setText] = useState('')
   const [mentions, setMentions] = useState<MentionItem[]>([])
@@ -146,6 +165,8 @@ export function SubscriptionComposer({
   const [previewCliId, setPreviewCliId] = useState<CliId>(selectedCli)
   const [fileFilter, setFileFilter] = useState('')
   const [listening, setListening] = useState(false)
+  const [estimate, setEstimate] = useState<{ tokens: number; contextTokens: number; continuing: boolean } | null>(null)
+  const [dragOver, setDragOver] = useState(false)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -159,6 +180,50 @@ export function SubscriptionComposer({
   useEffect(() => {
     setPreviewCliId(selectedCli)
   }, [selectedCli])
+
+  useEffect(() => {
+    const onAttach = (e: Event): void => {
+      const m = (e as CustomEvent<MentionItem>).detail
+      if (m) setMentions((prev) => (prev.some((x) => x.type === m.type && x.value === m.value) ? prev : [...prev, m]))
+    }
+    window.addEventListener('aihub-attach', onAttach)
+    return () => window.removeEventListener('aihub-attach', onAttach)
+  }, [])
+
+  // Debounced estimate of the tokens Send will cost (context + mentions + text)
+  useEffect(() => {
+    if (!currentProject || (!text.trim() && !mentions.length)) {
+      setEstimate(null)
+      return
+    }
+    const timer = setTimeout(() => {
+      api.projects
+        .estimate({ projectId: currentProject.id, taskId: estimateTaskId ?? null, cli: selectedCli, prompt: text || ' ', mentions })
+        .then(setEstimate)
+        .catch(() => setEstimate(null))
+    }, 450)
+    return () => clearTimeout(timer)
+  }, [text, mentions, selectedCli, currentProject, estimateTaskId])
+
+  const attachFiles = async (files: File[]): Promise<void> => {
+    for (const f of files) {
+      const path = window.aihub?.pathForFile(f) ?? ''
+      if (f.type.startsWith('image/')) {
+        let saved = path
+        if (!saved) {
+          const dataUrl = await new Promise<string>((res) => {
+            const r = new FileReader()
+            r.onload = () => res(String(r.result))
+            r.readAsDataURL(f)
+          })
+          saved = (await api.attachments.saveImage(dataUrl, f.name || 'pasted').catch((e: Error) => (toast(e.message, true), ''))) || ''
+        }
+        if (saved) addMention({ type: 'image', label: f.name || 'image', value: saved })
+      } else if (path) {
+        addMention({ type: 'file', label: f.name, value: path })
+      }
+    }
+  }
 
   useEffect(() => {
     const onClickOutside = (e: MouseEvent): void => {
@@ -321,6 +386,34 @@ export function SubscriptionComposer({
           )}
         </div>
 
+        {onChangeCompareWith && submitMode === 'thread' && (
+          <label
+            className={cx('chip ml-auto mr-2 h-6 gap-1 px-2 text-[11px]', compareWith && 'chip-active')}
+            title="Run the same prompt on a second AI at the same time (each on its own branch) and compare"
+          >
+            <Columns2 size={11} />
+            <select
+              className="cursor-pointer bg-transparent text-[11px] outline-none"
+              value={compareWith ? `${compareWith.cli}|${compareWith.model}` : ''}
+              onChange={(e) => {
+                const [c, m] = e.target.value.split('|')
+                onChangeCompareWith(c ? { cli: c as CliId, model: m } : null)
+              }}
+            >
+              <option value="">Compare with…</option>
+              {clis
+                .filter((c) => c.authenticated)
+                .flatMap((c) =>
+                  c.models.map((m) => (
+                    <option key={`${c.id}|${m.id}`} value={`${c.id}|${m.id}`}>
+                      {c.shortName} · {m.name}
+                    </option>
+                  ))
+                )}
+            </select>
+          </label>
+        )}
+
         {/* Switch between interactive thread & task queue */}
         {onChangeSubmitMode && (
           <div className="flex items-center gap-1 rounded-lg border border-white/[0.07] bg-black/30 p-0.5 text-[11.5px]">
@@ -349,7 +442,21 @@ export function SubscriptionComposer({
       </div>
 
       {/* Main Dark Rounded Composer Box — exact match to screenshot */}
-      <div className="composer-box relative rounded-2xl px-4 pt-3.5 pb-2.5 transition-all">
+      <div
+        className={cx('composer-box relative rounded-2xl px-4 pt-3.5 pb-2.5 transition-all', dragOver && 'ring-2 ring-indigo-400/60')}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) {
+            e.preventDefault()
+            setDragOver(true)
+          }
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragOver(false)
+          attachFiles([...e.dataTransfer.files])
+        }}
+      >
         {/* Mention Chips Row */}
         {mentions.length > 0 && (
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -362,6 +469,10 @@ export function SubscriptionComposer({
                   <BookOpen size={12} className="text-indigo-400" />
                 ) : m.type === 'skill' ? (
                   <Wand2 size={12} className="text-amber-300" />
+                ) : m.type === 'image' ? (
+                  <ImageIcon size={12} className="text-sky-300" />
+                ) : m.type === 'element' ? (
+                  <Crosshair size={12} className="text-indigo-300" />
                 ) : (
                   <FileText size={12} className="text-zinc-400" />
                 )}
@@ -412,6 +523,13 @@ export function SubscriptionComposer({
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               handleSend()
+            }
+          }}
+          onPaste={(e) => {
+            const imgs = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'))
+            if (imgs.length) {
+              e.preventDefault()
+              attachFiles(imgs)
             }
           }}
           placeholder={placeholder}
@@ -481,6 +599,19 @@ export function SubscriptionComposer({
               <span>{PERMISSION_MODES.find((x) => x.id === permissionMode)?.label ?? 'Default'}</span>
               <ChevronDown size={12} className="opacity-70" />
             </button>
+
+            {estimate && (
+              <span
+                className="font-mono text-[11px] text-zinc-500"
+                title={
+                  estimate.continuing
+                    ? 'Continuing the same CLI session: only your message is sent (the CLI keeps earlier context).'
+                    : `Includes ~${fmtTok(estimate.contextTokens)} tokens of project context (compact knowledge base). Each AI also adds its own system prompt.`
+                }
+              >
+                ~{fmtTok(estimate.tokens * (compareWith ? 2 : 1))} tok
+              </span>
+            )}
 
             <button
               type="button"

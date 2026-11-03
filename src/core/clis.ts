@@ -965,6 +965,35 @@ function agyGroupModels(group: AgyQuotaGroup, catalog: CliModel[]): string[] {
     .map((m) => m.id)
 }
 
+export async function refreshAgyQuota(): Promise<void> {
+  await fetchAgyLiveQuota(true)
+}
+
+const agyCatalog = (): CliModel[] => (dynamicAgyModels?.length ? dynamicAgyModels : CATALOG_MODELS.agy)
+
+function agyBucketsFor(modelId: string): AgyQuotaGroup['buckets'] {
+  const groups = cachedAgyQuota?.groups ?? []
+  return groups.flatMap((g) => (agyGroupModels(g, agyCatalog()).includes(modelId) ? g.buckets : []))
+}
+
+/** True when any quota window this model draws from is (almost) empty, per the last /usage read. */
+export function agyModelExhausted(modelId: string): boolean {
+  return agyBucketsFor(modelId).some((b) => (b.remaining_fraction ?? 1) <= 0.02)
+}
+
+/** A model from a different quota group that still has room, preferring the strongest (catalog order). */
+export function pickAgyAlternative(current: string, tried: Set<string>): string | null {
+  const blocked = new Set(agyBucketsFor(current).filter((b) => (b.remaining_fraction ?? 1) <= 0.02).map((b) => b.id))
+  for (const m of agyCatalog()) {
+    if (m.id === current || tried.has(m.id)) continue
+    const buckets = agyBucketsFor(m.id)
+    if (!buckets.length && cachedAgyQuota?.groups) continue
+    if (buckets.some((b) => blocked.has(b.id) || (b.remaining_fraction ?? 1) <= 0.02)) continue
+    return m.id
+  }
+  return null
+}
+
 // ───────────────────────────── Antigravity per-model quota buckets ─────────────────────────────
 
 /** Antigravity meters model families separately (Gemini Pro, Gemini Flash, Anthropic, OpenAI). */

@@ -252,3 +252,198 @@
     animation: none;
   }
 }
+
+/* ───────────────────────────── Light theme (Personal Hub light) ─────────────────────────────
+   The screens are authored dark-first; in light mode the shared components switch to Personal Hub's light
+   glass tokens and the dark-only utilities (white text, white/x tints, black/x wells) are remapped. */
+html.light body {
+  color: #18181b;
+  background-color: #ecf0f8;
+  background-image:
+    radial-gradient(at 8% 6%, color-mix(in srgb, var(--color-accent) 18%, transparent) 0px, transparent 52%),
+    radial-gradient(at 92% 10%, rgba(56, 189, 248, 0.16) 0px, transparent 48%),
+    radial-gradient(at 82% 88%, rgba(168, 85, 247, 0.13) 0px, transparent 52%),
+    radial-gradient(at 16% 86%, rgba(16, 185, 129, 0.1) 0px, transparent 48%),
+    linear-gradient(135deg, #f5f7fc 0%, #e8eef8 50%, #eef1f9 100%);
+}
+html.light ::-webkit-scrollbar-thumb {
+  background-color: rgb(113 113 122 / 0.4);
+}
+
+/* Components */
+html.light .card {
+  border-color: rgb(255 255 255 / 0.75);
+  background-color: rgb(255 255 255 / 0.62);
+  box-shadow: 0 10px 30px -10px rgba(15, 23, 42, 0.07), 0 2px 6px -1px rgba(15, 23, 42, 0.03), inset 0 1px 0 0 rgba(255, 255, 255, 0.82);
+}
+html.light .glass-float {
+  border-color: rgb(255 255 255 / 0.8);
+  background-color: rgb(255 255 255 / 0.9);
+  box-shadow: 0 20px 50px -12px rgba(15, 23, 42, 0.18), 0 4px 12px -2px rgba(15, 23, 42, 0.06), inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
+}
+html.light .glass-sidebar {
+  border-color: rgb(255 255 255 / 0.65);
+  background-color: rgb(255 255 255 / 0.48);
+  box-shadow: inset -1px 0 0 0 rgba(255, 255, 255, 0.45);
+}
+html.light .glass-bar {
+  border-color: rgb(15 23 42 / 0.06);
+  background-color: rgb(255 255 255 / 0.35);
+}
+html.light .composer-box {
+  border-color: rgb(255 255 255 / 0.85);
+  background-color: rgb(255 255 255 / 0.78);
+  box-shadow: 0 18px 40px -14px rgba(15, 23, 42, 0.16), inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
+}
+html.light .btn {
+  border-color: rgb(255 255 255 / 0.8);
+  background-color: rgb(255 255 255 / 0.65);
+  color: #3f3f46;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+html.light .btn:hover {
+  background-color: rgb(255 255 255 / 0.9);
+}
+html.light .btn-primary {
+  color: #fff;
+  background-color: var(--color-accent);
+  border-color: rgb(255 255 255 / 0.25);
+}
+html.light .btn-primary:hover {
+  background-color: var(--color-accent-hover);
+}
+html.light .btn-ghost {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+html.light .btn-ghost:hover {
+  background-color: rgb(255 255 255 / 0.6);
+}
+html.light .btn-danger {
+  color: #dc2626;
+}
+html.light .input {
+  border-color: rgb(255 255 255 / 0.75);
+  background-color: rgb(255 255 255 / 0.6);
+  color: #18181b;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+html.light select.input option {
+  background-color: #f8fafc;
+  color: #18181b;
+}
+html.light .chip {
+  border-color: rgb(255 255 255 / 0.75);
+  background-color: rgb(255 255 255 / 0.55);
+  color: #52525b;
+}
+html.light .chip-active {
+  border-color: rgb(24 24 27 / 0.8);
+  background-color: rgb(24 24 27 / 0.85);
+  color: #fff;
+}
+html.light .segmented {
+  border-color: rgb(255 255 255 / 0.7);
+  background-color: rgb(255 255 255 / 0.45);
+}
+html.light .segmented > button {
+  color: #71717a;
+}
+html.light .segmented > button[data-on='true'] {
+  background-color: rgb(255 255 255 / 0.9);
+  color: #18181b;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+html.light .nav-item {
+  color: #52525b;
+}
+html.light .nav-item:hover {
+  background-color: rgb(255 255 255 / 0.55);
+  color: #18181b;
+}
+html.light .nav-item[data-on='true'] {
+  background-color: rgb(255 255 255 / 0.85);
+  color: #18181b;
+}
+html.light .eyebrow {
+  color: #71717a;
+}
+html.light .label,
+html.light .muted {
+  color: #6b7280;
+}
+html.light .kbd {
+  border-color: rgb(15 23 42 / 0.12);
+  background-color: rgb(255 255 255 / 0.7);
+  color: #52525b;
+}
+html.light .meter {
+  background-color: rgb(15 23 42 / 0.08);
+}
+
+/* Dark-only utilities → light equivalents */
+html.light .text-white,
+html.light .text-zinc-100 {
+  color: #18181b;
+}
+html.light .text-zinc-200 {
+  color: #27272a;
+}
+html.light .text-zinc-300 {
+  color: #3f3f46;
+}
+html.light .text-zinc-400 {
+  color: #52525b;
+}
+html.light .text-zinc-500,
+html.light .text-zinc-600 {
+  color: #71717a;
+}
+html.light :is(.text-indigo-100, .text-indigo-200, .text-indigo-300, .text-indigo-400) {
+  color: #4338ca;
+}
+html.light :is(.text-emerald-200, .text-emerald-300, .text-emerald-400) {
+  color: #047857;
+}
+html.light :is(.text-amber-200, .text-amber-300, .text-amber-400) {
+  color: #b45309;
+}
+html.light :is(.text-red-200, .text-red-300, .text-red-400) {
+  color: #b91c1c;
+}
+html.light :is(.text-sky-300, .text-sky-400) {
+  color: #0369a1;
+}
+html.light .text-purple-300 {
+  color: #7e22ce;
+}
+html.light [class^='bg-white/'],
+html.light [class*=' bg-white/'] {
+  background-color: rgb(15 23 42 / 0.045);
+}
+html.light [class*='hover:bg-white/']:hover {
+  background-color: rgb(15 23 42 / 0.07);
+}
+html.light [class^='bg-black/'],
+html.light [class*=' bg-black/'] {
+  background-color: rgb(255 255 255 / 0.55);
+}
+html.light [class*='border-white/'] {
+  border-color: rgb(15 23 42 / 0.1);
+}
+html.light [class*='divide-white/'] > :not(:last-child) {
+  border-color: rgb(15 23 42 / 0.08);
+}
+html.light .placeholder\:text-zinc-500::placeholder {
+  color: #a1a1aa;
+}
+
+/* Terminal stays dark in both themes */
+html.light .terminal-surface {
+  background-color: #0f1117 !important;
+  border-color: rgb(255 255 255 / 0.08) !important;
+}
+html.light .terminal-surface :is(.text-zinc-200, .text-zinc-300, .text-zinc-400) {
+  color: #d4d4d8;
+}

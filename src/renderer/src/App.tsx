@@ -45,6 +45,9 @@ import type {
 import { CliAvatar, CliSpinner } from './components/CliAvatars'
 import { EmbeddedTerminal } from './components/EmbeddedTerminal'
 import { GitControls } from './components/GitControls'
+import { ApprovalCards, BrowserPreview, DiffReview, McpModal, PrButton, RulesModal, SchedulesPanel, SearchModal } from './components/Workbench'
+import { attachToComposer } from './components/SubscriptionComposer'
+import { Download, Globe, Plug, ScrollText, Search } from 'lucide-react'
 import { KnowledgeBaseView } from './components/KnowledgeBaseView'
 import { LiveLimitsModal, SubscriptionStatusStrip } from './components/LiveLimitsModal'
 import { SubscriptionComposer } from './components/SubscriptionComposer'
@@ -65,7 +68,7 @@ export default function App(): React.JSX.Element {
   const toasts = useToasts()
 
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
-  const [activeTab, setActiveTab] = useState<'session' | 'queue' | 'kb'>('session')
+  const [activeTab, setActiveTab] = useState<'session' | 'queue' | 'kb' | 'preview'>('session')
   const [activeTaskId, setActiveTaskId] = useState<number | null>(null)
 
   // Composer state
@@ -82,6 +85,48 @@ export default function App(): React.JSX.Element {
   const [editingProject, setEditingProject] = useState<Partial<Project> | null>(null)
   const [showLimitsModal, setShowLimitsModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [showSearch, setShowSearch] = useState(false)
+  const [showRules, setShowRules] = useState(false)
+  const [showMcp, setShowMcp] = useState(false)
+  const [compareWith, setCompareWith] = useState<{ cli: CliId; model: string } | null>(null)
+
+  // Theme: dark / light / follow Windows
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true)
+  useEffect(() => {
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+    const on = (e: MediaQueryListEvent): void => setSystemDark(e.matches)
+    mq?.addEventListener('change', on)
+    return () => mq?.removeEventListener('change', on)
+  }, [])
+  const theme: 'dark' | 'light' = settings?.theme === 'light' ? 'light' : settings?.theme === 'system' ? (systemDark ? 'dark' : 'light') : 'dark'
+  useEffect(() => {
+    document.documentElement.classList.toggle('light', theme === 'light')
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    api.app.setTheme(theme).catch(() => undefined)
+  }, [theme])
+
+  // Ctrl+K search; notification clicks jump to the session
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setShowSearch(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    const off = window.aihub?.onNavigate((route) => {
+      const [, pid, tid] = route.split('/')
+      if (pid) setSelectedProjectId(Number(pid))
+      if (tid) {
+        setActiveTaskId(Number(tid))
+        setActiveTab('session')
+      }
+    })
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      off?.()
+    }
+  }, [])
 
   const openProjects = (projectsList ?? []).filter((p) => !p.archived_at)
   const archivedProjects = (projectsList ?? []).filter((p) => p.archived_at)
@@ -152,6 +197,10 @@ export default function App(): React.JSX.Element {
   )
 
   const activeTask = (tasks ?? []).find((t) => t.id === activeTaskId) ?? null
+  const compareSiblings = activeTask?.compare_group ? (tasks ?? []).filter((t) => t.compare_group === activeTask.compare_group) : []
+  const sendReview = (t: ProjectTask, text: string): void => {
+    act(api.projects.reply(t.id, text), 'Review sent')
+  }
   const threads = (tasks ?? []).filter((t) => t.kind === 'thread')
   const queueItems = (tasks ?? []).filter((t) => t.kind === 'task')
 
@@ -181,6 +230,20 @@ export default function App(): React.JSX.Element {
   ): Promise<void> => {
     if (!currentProject) {
       setEditingProject({ name: '', folder: '', notes: '' })
+      return
+    }
+    if (!activeTask && mode === 'thread' && compareWith) {
+      const pair = await act(
+        api.projects.createCompare(
+          { projectId: currentProject.id, prompt, cli: selectedCli, model: selectedModel, effort: effectiveEffort, permissionMode, checkoutMode: 'worktree', mentions },
+          { cli: compareWith.cli, model: compareWith.model }
+        ),
+        'Running on both AIs — each on its own branch'
+      )
+      if (pair?.[0]) {
+        setActiveTab('session')
+        setActiveTaskId(pair[0].id)
+      }
       return
     }
     if (activeTask && activeTab === 'session' && mode === 'thread') {
@@ -261,6 +324,12 @@ export default function App(): React.JSX.Element {
             <Terminal size={12} /> Terminal
           </button>
 
+          <button type="button" onClick={() => setShowSearch(true)} className="btn btn-ghost btn-icon h-7 w-7" title="Search all sessions (Ctrl+K)">
+            <Search size={13} />
+          </button>
+          <button type="button" onClick={() => setShowMcp(true)} className="btn btn-ghost btn-icon h-7 w-7" title="MCP servers for every AI">
+            <Plug size={13} />
+          </button>
           <button
             type="button"
             onClick={() => setShowSettingsModal(true)}
@@ -349,7 +418,23 @@ export default function App(): React.JSX.Element {
           <div className="flex min-h-0 flex-1 flex-col px-3 py-2">
             <div className="mb-1.5 flex items-center justify-between px-1.5">
               <span className="eyebrow">Sessions</span>
-              <span className="text-[11px] text-zinc-500">{threads.length}</span>
+              <span className="flex items-center gap-1 text-[11px] text-zinc-500">
+                {currentProject && (
+                  <button
+                    type="button"
+                    className="cursor-pointer rounded p-0.5 text-zinc-500 hover:bg-white/[0.08] hover:text-zinc-200"
+                    title="Import this folder's existing Claude Code and Antigravity conversations (resumable)"
+                    onClick={() =>
+                      act(api.history.importExisting(currentProject.id)).then(
+                        (r) => r && toast(r.claude + r.agy ? `Imported ${r.claude} Claude and ${r.agy} Antigravity sessions` : 'No new sessions to import')
+                      )
+                    }
+                  >
+                    <Download size={12} />
+                  </button>
+                )}
+                {threads.length}
+              </span>
             </div>
 
             <div className="flex-1 space-y-0.5 overflow-y-auto pr-0.5">
@@ -436,6 +521,9 @@ export default function App(): React.JSX.Element {
                       </button>
                     )}
                     <GitControls project={currentProject} />
+                    <button type="button" className="btn h-7 px-2.5 text-[11.5px]" onClick={() => setShowRules(true)} title="One set of rules synced to CLAUDE.md, AGENTS.md, GEMINI.md and Copilot">
+                      <ScrollText size={12} className="text-amber-300" /> Rules
+                    </button>
                   </div>
                 </div>
               </div>
@@ -475,6 +563,10 @@ export default function App(): React.JSX.Element {
                   <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.2 text-[10.5px] text-emerald-300">
                     {(kbEntries ?? []).length}
                   </span>
+                </button>
+                <button type="button" onClick={() => setActiveTab('preview')} data-on={activeTab === 'preview'}>
+                  <Globe size={13} />
+                  <span>Preview</span>
                 </button>
               </div>
             </div>
@@ -533,6 +625,8 @@ export default function App(): React.JSX.Element {
                         onRefreshClis={reloadClis}
                         submitMode={submitMode}
                         onChangeSubmitMode={setSubmitMode}
+                        compareWith={compareWith}
+                        onChangeCompareWith={setCompareWith}
                         onSubmit={handleComposerSubmit}
                       />
 
@@ -588,13 +682,24 @@ export default function App(): React.JSX.Element {
                   /* Active Session / Agent Stream View + Bottom Composer */
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-                      <div className="mx-auto max-w-[880px]">
-                        <ActiveSessionStream
-                          task={activeTask}
-                          project={currentProject!}
-                          onOpenTerminal={() => setShowTerminal(true)}
-                        />
-                      </div>
+                      {activeTask.compare_group && compareSiblings.length > 1 ? (
+                        <div className="grid grid-cols-2 gap-4">
+                          {compareSiblings.map((sib) => (
+                            <div key={sib.id} className={cx('min-w-0 rounded-2xl p-1', sib.id === activeTask.id && 'ring-1 ring-indigo-400/40')} onClick={() => setActiveTaskId(sib.id)}>
+                              <ActiveSessionStream task={sib} project={currentProject!} onOpenTerminal={() => setShowTerminal(true)} onSendReview={(text) => sendReview(sib, text)} />
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mx-auto max-w-[880px]">
+                          <ActiveSessionStream
+                            task={activeTask}
+                            project={currentProject!}
+                            onOpenTerminal={() => setShowTerminal(true)}
+                            onSendReview={(text) => sendReview(activeTask, text)}
+                          />
+                        </div>
+                      )}
                     </div>
 
                     <div className="shrink-0 px-6 pt-2 pb-4">
@@ -630,6 +735,7 @@ export default function App(): React.JSX.Element {
                           onAuthenticateCli={handleAuthenticateCli}
                           onRefreshClis={reloadClis}
                           isRunning={activeTask.run_state === 'running'}
+                          estimateTaskId={activeTask.id}
                           onStop={() => act(api.projects.stop(activeTask.id), 'Stopped')}
                           placeholder={`Reply to ${clis?.find((c) => c.id === selectedCli)?.shortName ?? selectedCli} · ${selectedModelObj?.name ?? selectedModel} · ${effectiveEffort} effort — type / for skills`}
                           onSubmit={handleComposerSubmit}
@@ -664,6 +770,42 @@ export default function App(): React.JSX.Element {
                     onOpenSession={(taskId) => {
                       setActiveTaskId(taskId)
                       setActiveTab('session')
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'preview' && currentProject && (
+              <div className="flex min-h-0 flex-1 flex-col gap-3 px-6 py-4">
+                <div className="min-h-0 flex-1">
+                  <BrowserPreview project={currentProject} onPick={attachToComposer} />
+                </div>
+                <div className="mx-auto w-full max-w-[880px] shrink-0">
+                  <SubscriptionComposer
+                    projects={projectsList ?? []}
+                    currentProject={currentProject}
+                    onSelectProject={handleSelectProject}
+                    onNewProject={() => setEditingProject({ name: '', folder: '', notes: '' })}
+                    clis={clis ?? []}
+                    selectedCli={selectedCli}
+                    selectedModel={selectedModel}
+                    selectedEffort={selectedEffort}
+                    onSelectCliModel={handleSelectCliModel}
+                    onChangeEffort={handleChangeEffort}
+                    skills={skillsList ?? []}
+                    permissionMode={permissionMode}
+                    onChangePermissionMode={setPermissionMode}
+                    checkoutMode={checkoutMode}
+                    onChangeCheckoutMode={setCheckoutMode}
+                    projectFiles={projectFiles ?? []}
+                    knowledgeEntries={kbEntries ?? []}
+                    onOpenKnowledgeBase={() => setActiveTab('kb')}
+                    onAuthenticateCli={handleAuthenticateCli}
+                    onRefreshClis={reloadClis}
+                    placeholder="Pick an element above, then describe the change…"
+                    onSubmit={async (prompt, mentions, mode) => {
+                      await handleComposerSubmit(prompt, mentions, mode)
                     }}
                   />
                 </div>
@@ -719,6 +861,20 @@ export default function App(): React.JSX.Element {
         />
       )}
 
+      {showSearch && (
+        <SearchModal
+          projectId={currentProject?.id}
+          onClose={() => setShowSearch(false)}
+          onOpen={(pid, tid) => {
+            setSelectedProjectId(pid)
+            setActiveTaskId(tid)
+            setActiveTab('session')
+          }}
+        />
+      )}
+      {showRules && currentProject && <RulesModal project={currentProject} onClose={() => setShowRules(false)} />}
+      {showMcp && <McpModal clis={clis ?? []} onClose={() => setShowMcp(false)} />}
+
       {showSettingsModal && settings && (
         <SettingsModal settings={settings} onClose={() => setShowSettingsModal(false)} />
       )}
@@ -747,11 +903,13 @@ export default function App(): React.JSX.Element {
 function ActiveSessionStream({
   task: t,
   project,
-  onOpenTerminal
+  onOpenTerminal,
+  onSendReview
 }: {
   task: ProjectTask
   project: Project
   onOpenTerminal: () => void
+  onSendReview: (text: string) => void
 }): React.JSX.Element {
   const [subTab, setSubTab] = useState<'stream' | 'changes'>('stream')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -861,6 +1019,8 @@ function ActiveSessionStream({
             </button>
           )}
 
+          <PrButton task={t} />
+
           {!busy && t.checkout_mode === 'worktree' && t.branch && (
             <button
               type="button"
@@ -956,6 +1116,8 @@ function ActiveSessionStream({
             )
           })}
 
+          <ApprovalCards taskId={t.id} />
+
           {busy && (
             <div className="card flex items-center gap-3.5 p-4">
               <CliAvatar cli={activeCli} size={32} />
@@ -1032,7 +1194,11 @@ function ActiveSessionStream({
                 </div>
               )}
 
-              {selectedFile && (
+              {selectedFile && changes.files.find((f) => f.path === selectedFile)?.status !== 'A' && (
+                <DiffReview task={t} file={selectedFile} onSendReview={onSendReview} />
+              )}
+
+              {selectedFile && changes.files.find((f) => f.path === selectedFile)?.status === 'A' && (
                 <pre className="max-h-96 overflow-auto rounded-lg border border-white/[0.08] bg-black/50 p-3 font-mono text-[11.5px] leading-relaxed">
                   {(fileDiff ?? '').split('\n').map((line, idx) => (
                     <div
@@ -1144,6 +1310,11 @@ function ProjectTaskQueueView({
             )}
             {t.run_state === 'failed' && (
               <span className="rounded-full bg-red-500/20 px-2 py-0.2 text-[10.5px] text-red-300">Stopped</span>
+            )}
+            {t.tokens > 0 && (
+              <span className="muted font-mono text-[10.5px]" title={t.cost_usd ? `API-equivalent cost $${t.cost_usd.toFixed(2)}` : 'Tokens used by this task'}>
+                {fmtTokens(t.tokens)} tok{t.cost_usd ? ` · $${t.cost_usd.toFixed(2)}` : ''}
+              </span>
             )}
           </div>
           {t.branch && (
@@ -1298,6 +1469,8 @@ function ProjectTaskQueueView({
           )
         }}
       />
+
+      <SchedulesPanel project={project} clis={clis} cli={selectedCli} model={selectedModel} />
 
       {doing.length > 0 && (
         <section className="space-y-1.5">
@@ -1555,7 +1728,59 @@ function SettingsModal({ settings, onClose }: { settings: Settings; onClose: () 
           </div>
         </Field>
 
+        <Field label="Theme">
+          <div className="segmented">
+            {(['dark', 'light', 'system'] as const).map((th) => (
+              <button key={th} type="button" data-on={s.theme === th} onClick={() => setS({ ...s, theme: th })}>
+                {th === 'system' ? 'Match Windows' : th[0].toUpperCase() + th.slice(1)}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field
+          label="Phone notifications (ntfy topic)"
+          hint="Install the free ntfy app, subscribe to a hard-to-guess topic, and paste it here. You'll get a push when runs finish, fail, a queue completes, or an approval is needed. Leave empty to turn off."
+        >
+          <div className="flex gap-2">
+            <input
+              className="input font-mono text-[12px]"
+              value={s.ntfyTopic}
+              onChange={(e) => setS({ ...s, ntfyTopic: e.target.value })}
+              placeholder="aihub-yourname-7f3k2"
+            />
+            <button
+              type="button"
+              className="btn h-9"
+              disabled={!s.ntfyTopic.trim()}
+              onClick={() => act(api.settings.update({ ntfyTopic: s.ntfyTopic }).then(() => api.schedules.testPhone()), 'Test notification sent')}
+            >
+              Test
+            </button>
+          </div>
+        </Field>
+
         <div className="space-y-2 pt-2">
+          <label className="flex cursor-pointer items-center gap-2 text-[13px] text-zinc-200">
+            <input
+              type="checkbox"
+              checked={s.agyFamilyFallback}
+              onChange={(e) => setS({ ...s, agyFamilyFallback: e.target.checked })}
+              className="accent-indigo-500"
+            />
+            When an Antigravity model group runs out, switch to a model from another group before handing over
+          </label>
+
+          <label className="flex cursor-pointer items-center gap-2 text-[13px] text-zinc-200">
+            <input
+              type="checkbox"
+              checked={s.graphifyWatch}
+              onChange={(e) => setS({ ...s, graphifyWatch: e.target.checked })}
+              className="accent-indigo-500"
+            />
+            Keep the graphify code graph updated automatically as files change
+          </label>
+
           <label className="flex cursor-pointer items-center gap-2 text-[13px] text-zinc-200">
             <input
               type="checkbox"

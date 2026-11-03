@@ -20,8 +20,20 @@ export function getKnowledgeEntry(id: number): KnowledgeEntry {
 }
 
 /** Sync the project's unified Knowledge Base to `<dir>/.ai-kb/PROJECT_KNOWLEDGE.md` so any CLI agent can read it directly. */
+let syncPaused = false
+
+/** Run `fn` without touching .ai-kb files on disk (used for token estimates while typing). */
+export function withoutKbSync<T>(fn: () => T): T {
+  syncPaused = true
+  try {
+    return fn()
+  } finally {
+    syncPaused = false
+  }
+}
+
 export function syncKnowledgeToDir(projectId: number, dir: string): string | null {
-  if (!dir || !existsSync(dir)) return null
+  if (syncPaused || !dir || !existsSync(dir)) return null
   if (!getSettings().syncKbToDisk) return null
   try {
     const p = get<Project>('SELECT * FROM projects WHERE id = ?', projectId)

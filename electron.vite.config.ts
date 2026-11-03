@@ -10,7 +10,16 @@ export default defineConfig({
     resolve: { alias: shared }
   },
   preload: {
-    resolve: { alias: shared }
+    resolve: { alias: shared },
+    build: {
+      rollupOptions: {
+        // index = app bridge; picker = injected into the browser-preview <webview> for element picking
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          picker: resolve(__dirname, 'src/preload/picker.ts')
+        }
+      }
+    }
   },
   renderer: {
     resolve: {

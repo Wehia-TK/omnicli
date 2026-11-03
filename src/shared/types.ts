@@ -60,6 +60,70 @@ export interface CliLimitInfo {
   modelBuckets?: ModelLimitBucket[]
 }
 
+export interface Schedule {
+  id: number
+  project_id: number
+  title: string
+  prompt: string
+  cli: CliId
+  model: string
+  effort: EffortLevel
+  permission_mode: PermissionMode
+  kind: 'daily' | 'weekly' | 'hourly'
+  time_of_day: string
+  every_hours: number
+  weekday: number
+  enabled: number
+  last_run_at: number | null
+  next_run_at: number | null
+  created_at: string
+}
+
+export interface McpServerEntry {
+  name: string
+  type: 'stdio' | 'http'
+  command?: string
+  args?: string[]
+  url?: string
+  env?: Record<string, string>
+  /** Which CLIs currently have this server configured */
+  installedIn: CliId[]
+}
+
+export interface SearchHit {
+  taskId: number
+  projectId: number
+  projectName: string
+  title: string
+  snippet: string
+  at: string
+}
+
+export interface PrInfo {
+  url: string
+  number: number
+  state: string
+  title: string
+  checks: { name: string; state: string }[]
+}
+
+export interface DiffHunk {
+  index: number
+  header: string
+  oldStart: number
+  newStart: number
+  lines: { kind: ' ' | '+' | '-'; text: string; oldNo: number | null; newNo: number | null }[]
+}
+
+export interface ApprovalRequest {
+  id: string
+  taskId: number
+  toolName: string
+  input: Record<string, unknown>
+  summary: string
+  createdAt: string
+}
+
 export interface SkillInfo {
   name: string
   description: string
@@ -123,7 +187,7 @@ export interface Project {
 }
 
 export interface MentionItem {
-  type: 'project' | 'file' | 'kb' | 'skill'
+  type: 'project' | 'file' | 'kb' | 'skill' | 'image' | 'element'
   label: string
   value: string
 }
@@ -143,6 +207,8 @@ export interface ProjectTask {
   session_id: string | null
   agy_conversation: string | null
   codex_thread?: string | null
+  compare_group?: string | null
+  pr_url?: string | null
   branch: string | null
   worktree: string | null
   base_commit: string | null
@@ -202,6 +268,12 @@ export interface Settings {
   kbPromptMode: 'compact' | 'full'
   /** Build/refresh a graphify code graph during KB scans (no LLM tokens used) */
   useGraphify: boolean
+  /** Rebuild the graphify graph automatically when project files change */
+  graphifyWatch: boolean
+  /** ntfy.sh topic for phone notifications (empty = off) */
+  ntfyTopic: string
+  /** When an Antigravity model group runs out, switch to a model from another group first */
+  agyFamilyFallback: boolean
   defaultPermissionMode: PermissionMode
   defaultCheckoutMode: CheckoutMode
   cliHandover: boolean

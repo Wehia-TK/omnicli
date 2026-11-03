@@ -125,6 +125,28 @@ const MIGRATIONS: string[] = [
   DELETE FROM settings WHERE key IN ('defaultCli', 'defaultModel') AND value IN ('"agy"', '"gemini-4-argon-high"', '"gemini-4-argon"');
   -- Stale rate-limit locks without a reset time used to stick at 100% forever
   DELETE FROM cli_rate_events WHERE resets_at IS NULL;
+  `,
+  `
+  ALTER TABLE project_tasks ADD COLUMN compare_group TEXT;
+  ALTER TABLE project_tasks ADD COLUMN pr_url TEXT;
+  CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    cli TEXT NOT NULL DEFAULT 'claude',
+    model TEXT NOT NULL DEFAULT '',
+    effort TEXT NOT NULL DEFAULT 'medium',
+    permission_mode TEXT NOT NULL DEFAULT 'accept-edits',
+    kind TEXT NOT NULL DEFAULT 'daily',
+    time_of_day TEXT NOT NULL DEFAULT '09:00',
+    every_hours INTEGER NOT NULL DEFAULT 24,
+    weekday INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_run_at INTEGER,
+    next_run_at INTEGER,
+    created_at TEXT NOT NULL
+  );
   `
 ]
 

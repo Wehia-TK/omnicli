@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
 import type {
+  ApprovalRequest,
+  DiffHunk,
+  McpServerEntry,
+  PrInfo,
+  Schedule,
+  SearchHit,
   CheckoutMode,
   CliId,
   CliSubscriptionStatus,
@@ -41,7 +47,46 @@ const call = <T>(path: string, ...args: unknown[]): Promise<T> => {
 export const api = {
   app: {
     chooseFolder: () => call<string | null>('app.chooseFolder'),
-    openPath: (target: string) => call<true>('app.openPath', target)
+    openPath: (target: string) => call<true>('app.openPath', target),
+    setTheme: (theme: 'dark' | 'light') => call<true>('app.setTheme', theme),
+    pickerPreload: () => call<string>('app.pickerPreload')
+  },
+  approvals: {
+    list: (taskId?: number) => call<ApprovalRequest[]>('approvals.list', taskId),
+    decide: (id: string, decision: 'allow' | 'always' | 'deny', message?: string) => call<true>('approvals.decide', id, decision, message)
+  },
+  rules: {
+    get: (projectId: number) =>
+      call<{ text: string; files: { name: string; exists: boolean; managed: boolean; otherContent: boolean }[] }>('rules.get', projectId),
+    save: (projectId: number, text: string, targets?: string[]) => call<true>('rules.save', projectId, text, targets)
+  },
+  attachments: {
+    saveImage: (dataUrl: string, name?: string) => call<string>('attachments.saveImage', dataUrl, name)
+  },
+  history: {
+    search: (query: string, projectId?: number) => call<SearchHit[]>('history.search', query, projectId),
+    importExisting: (projectId: number) => call<{ claude: number; agy: number }>('history.importExisting', projectId)
+  },
+  github: {
+    createPr: (taskId: number, title?: string, body?: string) => call<PrInfo>('github.createPr', taskId, title, body),
+    status: (taskId: number) => call<PrInfo>('github.status', taskId)
+  },
+  review: {
+    hunks: (taskId: number, file: string) => call<DiffHunk[]>('review.hunks', taskId, file),
+    revertHunk: (taskId: number, file: string, index: number) => call<DiffHunk[]>('review.revertHunk', taskId, file, index)
+  },
+  schedules: {
+    list: (projectId: number) => call<Schedule[]>('schedules.list', projectId),
+    save: (s: Partial<Schedule> & { project_id: number; title: string; prompt: string }) => call<Schedule>('schedules.save', s),
+    toggle: (id: number) => call<Schedule>('schedules.toggle', id),
+    delete: (id: number) => call<true>('schedules.delete', id),
+    runNow: (id: number) => call<true>('schedules.runNow', id),
+    testPhone: () => call<true>('schedules.testPhone')
+  },
+  mcp: {
+    list: () => call<McpServerEntry[]>('mcp.list'),
+    add: (def: Omit<McpServerEntry, 'installedIn'>, targets: CliId[]) => call<McpServerEntry[]>('mcp.add', def, targets),
+    remove: (name: string, targets: CliId[]) => call<McpServerEntry[]>('mcp.remove', name, targets)
   },
   settings: {
     get: () => call<Settings>('settings.get'),
@@ -79,6 +124,22 @@ export const api = {
       call<Project>('projects.setDefaults', id, d),
     delete: (id: number) => call<true>('projects.delete', id),
     files: (projectId: number) => call<string[]>('projects.files', projectId),
+    estimate: (opts: { projectId: number; taskId?: number | null; cli: CliId; prompt: string; mentions?: MentionItem[] }) =>
+      call<{ tokens: number; contextTokens: number; continuing: boolean }>('projects.estimate', opts),
+    createCompare: (
+      opts: {
+        projectId: number
+        prompt: string
+        kind?: 'thread' | 'task'
+        cli: CliId
+        model: string
+        effort?: EffortLevel
+        permissionMode: PermissionMode
+        checkoutMode: CheckoutMode
+        mentions?: MentionItem[]
+      },
+      second: { cli: CliId; model: string; effort?: EffortLevel }
+    ) => call<ProjectTask[]>('projects.createCompare', opts, second),
     tasks: (projectId: number) => call<ProjectTask[]>('projects.tasks', projectId),
     createAndRun: (opts: {
       projectId: number
@@ -117,8 +178,10 @@ export const api = {
     discard: (id: number) => call<ProjectTask>('projects.discard', id)
   },
   terminal: {
-    start: (sessionId: string, cwd: string, initialCommand?: string) =>
-      call<{ sessionId: string; cwd: string }>('terminal.start', sessionId, cwd, initialCommand),
+    start: (sessionId: string, cwd: string, initialCommand?: string, cols?: number, rows?: number) =>
+      call<{ sessionId: string; cwd: string; pty: boolean }>('terminal.start', sessionId, cwd, initialCommand, cols, rows),
+    write: (sessionId: string, data: string) => call<true>('terminal.write', sessionId, data),
+    resize: (sessionId: string, cols: number, rows: number) => call<true>('terminal.resize', sessionId, cols, rows),
     send: (sessionId: string, input: string, cwd?: string) => call<true>('terminal.send', sessionId, input, cwd),
     stop: (sessionId: string) => call<true>('terminal.stop', sessionId),
     openExternalCli: (cli: CliId, cwd: string, extraArgs?: string) =>

@@ -2,7 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electr
 import { join } from 'node:path'
 import { coreApi } from '../core/api'
 import { onDbChange, openDatabase } from '../core/db'
-import { initProjects, stopAllRuns } from '../core/projects'
+import { initApprovals } from '../core/approvals'
+import { refreshGraphWatchers, stopGraphWatchers } from '../core/graphwatch'
+import { initProjects, projects, stopAllRuns } from '../core/projects'
+import { initScheduler, phoneNotify } from '../core/scheduler'
+import { initWorkspace } from '../core/workspace'
 import { initTerminal, stopAllTerminals } from '../core/terminal'
 
 let mainWindow: BrowserWindow | null = null
@@ -36,7 +40,8 @@ function createWindow(): void {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
-      contextIsolation: true
+      contextIsolation: true,
+      webviewTag: true
     }
   })
 
@@ -69,6 +74,38 @@ app.whenReady().then(() => {
     }
   })
 
+  initWorkspace(dataDir)
+  initApprovals(dataDir, (req) => {
+    broadcastChanged()
+    if (!req) return
+    const t = projects.taskInfo(req.taskId)
+    const title = `${t?.projectName ?? 'AI Hub'}: approval needed`
+    if (Notification.isSupported() && !mainWindow?.isFocused()) {
+      const n = new Notification({ title, body: req.summary.slice(0, 160) })
+      n.on('click', () => {
+        mainWindow?.show()
+        mainWindow?.focus()
+        if (t) mainWindow?.webContents.send('navigate', `projects/${t.projectId}/${req.taskId}`)
+      })
+      n.show()
+    }
+    phoneNotify(title, req.summary)
+  })
+  initScheduler((sch) => {
+    projects.createAndRun({
+      projectId: sch.project_id,
+      prompt: sch.prompt,
+      kind: 'task',
+      cli: sch.cli,
+      model: sch.model,
+      effort: sch.effort,
+      permissionMode: sch.permission_mode,
+      checkoutMode: 'worktree',
+      startImmediately: true
+    })
+  })
+  refreshGraphWatchers()
+
   initTerminal((ev) => {
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send('terminal-output', ev)
@@ -79,6 +116,19 @@ app.whenReady().then(() => {
     if (path === 'app.chooseFolder') {
       const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
       return r.canceled ? null : r.filePaths[0] ?? null
+    }
+    if (path === 'app.setTheme') {
+      const dark = args[0] !== 'light'
+      try {
+        mainWindow?.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#a1a1aa' : '#3f3f46', height: 36 })
+        mainWindow?.setBackgroundColor(dark ? '#08090f' : '#eef1f9')
+      } catch {
+        // overlay not supported
+      }
+      return true
+    }
+    if (path === 'app.pickerPreload') {
+      return `file:///${join(__dirname, '../preload/picker.js').split('\\').join('/')}`
     }
     if (path === 'app.openPath') {
       const target = String(args[0] ?? '')
@@ -107,6 +157,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   stopAllRuns()
   stopAllTerminals()
+  stopGraphWatchers()
 })
 
 app.on('window-all-closed', () => {
