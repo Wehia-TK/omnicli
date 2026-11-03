@@ -109,6 +109,13 @@ const MIGRATIONS: string[] = [
   `,
   `
   UPDATE projects SET default_model = 'claude-opus-5-5' WHERE default_model IN ('sonnet', 'opus', 'haiku', 'claude-haiku-4-5-20251001');
+  `,
+  `
+  ALTER TABLE projects ADD COLUMN default_effort TEXT NOT NULL DEFAULT 'high';
+  ALTER TABLE project_tasks ADD COLUMN effort TEXT NOT NULL DEFAULT 'high';
+  UPDATE projects SET default_model = 'gemini-4-argon', default_effort = 'high' WHERE default_model = 'gemini-4-argon-high';
+  UPDATE projects SET default_model = 'gemini-4-argon', default_effort = 'medium' WHERE default_model = 'gemini-4-argon-medium';
+  UPDATE projects SET default_model = 'gemini-4-argon', default_effort = 'low' WHERE default_model = 'gemini-4-argon-low';
   `
 ]
 
@@ -155,7 +162,7 @@ function seedInitialProjects(): void {
         'Centralized desktop app for AI CLI subscriptions (Claude Code, Antigravity, Codex, Gemini, Copilot) with live usage limits and shared Project Knowledge Base.',
         'npm run typecheck && npm run build',
         'agy',
-        'gemini-4-argon-high',
+        'gemini-4-argon',
         'default',
         'local',
         1,

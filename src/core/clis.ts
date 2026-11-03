@@ -2,47 +2,223 @@ import { execFile, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CliId, CliLimitInfo, CliModel, CliSubscriptionStatus } from '@shared/types'
+import type { CliId, CliLimitInfo, CliModel, CliSubscriptionStatus, EffortLevel } from '@shared/types'
 import { all, get, nowLocal, run, runSilent } from './db'
 import { getSettings } from './settings'
 
 const CATALOG_MODELS: Record<CliId, CliModel[]> = {
   agy: [
-    { id: 'gemini-4-argon-high', name: 'Gemini 4 Argon', tier: 'High', cli: 'agy', description: 'Deep-reasoning flagship model in Antigravity (High effort)' },
-    { id: 'gemini-4-argon-medium', name: 'Gemini 4 Argon', tier: 'Medium', cli: 'agy', description: 'Balanced reasoning and speed in Antigravity (Medium effort)' },
-    { id: 'gemini-4-argon-low', name: 'Gemini 4 Argon', tier: 'Low', cli: 'agy', description: 'Low-latency Gemini 4 Argon (Low effort)' },
-    { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash', tier: 'High', cli: 'agy', description: 'Fast frontier model with high reasoning effort' },
-    { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash', tier: 'Medium', cli: 'agy', description: 'Fast everyday coding & tool execution' },
-    { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash', tier: 'Low', cli: 'agy', description: 'Ultra-fast responses & quick edits' },
-    { id: 'claude-opus-5-5-high', name: 'Claude Opus 5.5', tier: 'High', cli: 'agy', description: 'Anthropic Opus 5.5 (High effort) via Antigravity' },
-    { id: 'claude-opus-5-5-medium', name: 'Claude Opus 5.5', tier: 'Medium', cli: 'agy', description: 'Anthropic Opus 5.5 (Medium effort) via Antigravity' },
-    { id: 'claude-sonnet-5-5-high', name: 'Claude Sonnet 5.5', tier: 'High', cli: 'agy', description: 'Anthropic Sonnet 5.5 (High effort) via Antigravity' },
-    { id: 'claude-sonnet-5-5-medium', name: 'Claude Sonnet 5.5', tier: 'Medium', cli: 'agy', description: 'Anthropic Sonnet 5.5 (Medium effort) via Antigravity' },
-    { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B', tier: 'Medium', cli: 'agy', description: 'Open-weight 120B model via Antigravity' }
+    {
+      id: 'gemini-4-argon',
+      name: 'Gemini 4 Argon',
+      tier: 'Flagship',
+      cli: 'agy',
+      description: 'Deep-reasoning flagship model in Antigravity',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+      effortModelMap: {
+        low: 'gemini-4-argon-low',
+        medium: 'gemini-4-argon-medium',
+        high: 'gemini-4-argon-high'
+      }
+    },
+    {
+      id: 'gemini-3.8-flash',
+      name: 'Gemini 3.8 Flash',
+      tier: 'Fast',
+      cli: 'agy',
+      description: 'Fast frontier model for everyday coding & tool execution',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+      effortModelMap: {
+        low: 'gemini-3.8-flash-low',
+        medium: 'gemini-3.8-flash-medium',
+        high: 'gemini-3.8-flash-high'
+      }
+    },
+    {
+      id: 'claude-opus-5-5',
+      name: 'Claude Opus 5.5',
+      tier: 'Opus',
+      cli: 'agy',
+      description: 'Anthropic Opus 5.5 via Antigravity',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+      effortModelMap: {
+        low: 'claude-opus-5-5-low',
+        medium: 'claude-opus-5-5-medium',
+        high: 'claude-opus-5-5-high'
+      }
+    },
+    {
+      id: 'claude-sonnet-5-5',
+      name: 'Claude Sonnet 5.5',
+      tier: 'Sonnet',
+      cli: 'agy',
+      description: 'Anthropic Sonnet 5.5 via Antigravity',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+      effortModelMap: {
+        low: 'claude-sonnet-5-5-low',
+        medium: 'claude-sonnet-5-5-medium',
+        high: 'claude-sonnet-5-5-high'
+      }
+    },
+    {
+      id: 'gpt-oss-120b',
+      name: 'GPT-OSS 120B',
+      tier: 'Open',
+      cli: 'agy',
+      description: 'Open-weight 120B model via Antigravity',
+      efforts: ['medium'],
+      defaultEffort: 'medium',
+      effortModelMap: {
+        medium: 'gpt-oss-120b-medium'
+      }
+    }
   ],
   claude: [
-    { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', tier: 'High', cli: 'claude', description: 'For complex work and everyday tasks (1M context)' },
-    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', tier: 'Medium', cli: 'claude', description: 'Most efficient for simpler tasks (1M context)' },
-    { id: 'claude-fable-5-1', name: 'Claude Fable 5.1', tier: 'High', cli: 'claude', description: 'For your toughest challenges · Requires usage credits' },
-    { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', tier: 'Fast', cli: 'claude', description: 'Fastest for quick answers' },
-    { id: 'claude-opus-5', name: 'Claude Opus 5', tier: 'High', cli: 'claude', description: 'Previous-generation Opus 5' },
-    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', tier: 'High', cli: 'claude', description: 'Previous-generation Sonnet 5' },
-    { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', tier: 'High', cli: 'claude', description: 'Claude 4.8 Opus' }
+    {
+      id: 'claude-opus-5-5',
+      name: 'Claude Opus 5.5',
+      tier: '1M ctx',
+      cli: 'claude',
+      description: 'For complex work and everyday tasks',
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'medium'
+    },
+    {
+      id: 'claude-sonnet-5-5',
+      name: 'Claude Sonnet 5.5',
+      tier: '1M ctx',
+      cli: 'claude',
+      description: 'Most efficient for simpler tasks',
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'medium'
+    },
+    {
+      id: 'claude-fable-5-1',
+      name: 'Claude Fable 5.1',
+      tier: 'Credits',
+      cli: 'claude',
+      description: 'For your toughest challenges · Requires usage credits',
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'high'
+    },
+    {
+      id: 'claude-haiku-5-5',
+      name: 'Claude Haiku 5.5',
+      tier: 'Fast',
+      cli: 'claude',
+      description: 'Fastest for quick answers',
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'medium'
+    },
+    {
+      id: 'claude-opus-5',
+      name: 'Claude Opus 5',
+      tier: '1M ctx',
+      cli: 'claude',
+      description: 'Previous-generation Opus 5',
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'medium'
+    },
+    {
+      id: 'claude-sonnet-5',
+      name: 'Claude Sonnet 5',
+      tier: '1M ctx',
+      cli: 'claude',
+      description: 'Previous-generation Sonnet 5',
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'high'
+    }
   ],
   codex: [
-    { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', tier: 'High', cli: 'codex', description: 'OpenAI flagship software engineering agent' },
-    { id: 'gpt-5-codex', name: 'GPT-5 Codex', tier: 'High', cli: 'codex', description: 'Deep full-repo coding and debugging' },
-    { id: 'o4-high', name: 'OpenAI o4', tier: 'High', cli: 'codex', description: 'Deep reasoning for hard algorithmic & systems tasks' },
-    { id: 'o4-mini', name: 'OpenAI o4-mini', tier: 'Fast', cli: 'codex', description: 'Fast reasoning with high rate limits on ChatGPT Plus/Pro' }
+    {
+      id: 'gpt-5.2-codex',
+      name: 'GPT-5.2 Codex',
+      tier: 'Flagship',
+      cli: 'codex',
+      description: 'OpenAI flagship software engineering agent',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high'
+    },
+    {
+      id: 'gpt-5-codex',
+      name: 'GPT-5 Codex',
+      tier: 'Codex',
+      cli: 'codex',
+      description: 'Deep full-repo coding and debugging',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high'
+    },
+    {
+      id: 'o4-high',
+      name: 'OpenAI o4',
+      tier: 'Reasoning',
+      cli: 'codex',
+      description: 'Deep reasoning for hard algorithmic & systems tasks',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high'
+    },
+    {
+      id: 'o4-mini',
+      name: 'OpenAI o4-mini',
+      tier: 'Fast',
+      cli: 'codex',
+      description: 'Fast reasoning with high rate limits on ChatGPT Plus/Pro',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium'
+    }
   ],
   gemini: [
-    { id: 'gemini-4-argon', name: 'Gemini 4 Argon', tier: 'High', cli: 'gemini', description: 'Flagship reasoning & coding via standalone Gemini CLI' },
-    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', tier: 'Fast', cli: 'gemini', description: 'High-speed coding and shell assistance' }
+    {
+      id: 'gemini-4-argon',
+      name: 'Gemini 4 Argon',
+      tier: 'Flagship',
+      cli: 'gemini',
+      description: 'Flagship reasoning & coding via standalone Gemini CLI',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high'
+    },
+    {
+      id: 'gemini-3.8-flash',
+      name: 'Gemini 3.8 Flash',
+      tier: 'Fast',
+      cli: 'gemini',
+      description: 'High-speed coding and shell assistance',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium'
+    }
   ],
   copilot: [
-    { id: 'claude-sonnet-5-5', name: 'Copilot · Sonnet 5.5', tier: 'High', cli: 'copilot', description: 'Claude Sonnet 5.5 via GitHub Copilot CLI' },
-    { id: 'claude-opus-5-5', name: 'Copilot · Opus 5.5', tier: 'High', cli: 'copilot', description: 'Claude Opus 5.5 via GitHub Copilot CLI' },
-    { id: 'gpt-5.2', name: 'Copilot · GPT-5.2', tier: 'Fast', cli: 'copilot', description: 'OpenAI GPT-5.2 via GitHub Copilot CLI' }
+    {
+      id: 'claude-sonnet-5-5',
+      name: 'Copilot · Sonnet 5.5',
+      tier: 'Sonnet',
+      cli: 'copilot',
+      description: 'Claude Sonnet 5.5 via GitHub Copilot CLI',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium'
+    },
+    {
+      id: 'claude-opus-5-5',
+      name: 'Copilot · Opus 5.5',
+      tier: 'Opus',
+      cli: 'copilot',
+      description: 'Claude Opus 5.5 via GitHub Copilot CLI',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high'
+    },
+    {
+      id: 'gpt-5.2',
+      name: 'Copilot · GPT-5.2',
+      tier: 'Fast',
+      cli: 'copilot',
+      description: 'OpenAI GPT-5.2 via GitHub Copilot CLI',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium'
+    }
   ]
 }
 
@@ -764,7 +940,7 @@ export function recordCliRateEvent(
 
 let dynamicAgyModels: CliModel[] | null = null
 
-/** Parse `agy models` tab-separated output: `<id>\t<Display Name (Tier)>` */
+/** Parse `agy models` tab-separated output and group effort variants (`-low`, `-medium`, `-high`) into single base models! */
 async function loadDynamicAgyModels(exePath: string): Promise<CliModel[]> {
   if (dynamicAgyModels !== null) return dynamicAgyModels
   if (!exePath) return []
@@ -774,27 +950,57 @@ async function loadDynamicAgyModels(exePath: string): Promise<CliModel[]> {
         dynamicAgyModels = []
         return resolve([])
       }
-      const parsed: CliModel[] = []
+      const grouped = new Map<string, CliModel>()
       for (const rawLine of out.split(/\r?\n/)) {
         const line = rawLine.trim()
         if (!line || line.startsWith('Fetching')) continue
         const parts = line.split(/\t+/)
-        const id = parts[0]?.trim() ?? ''
-        if (!/^[a-z0-9][\w.:-]*$/i.test(id) || !/\d/.test(id)) continue
-        const labelPart = parts[1]?.trim() ?? id
-        const tierMatch = labelPart.match(/\(([^)]+)\)\s*$/)
-        const tier = tierMatch ? tierMatch[1] : /high/i.test(id) ? 'High' : /low/i.test(id) ? 'Low' : 'Medium'
-        const cleanName = labelPart.replace(/\s*\([^)]+\)\s*$/, '').trim()
-        parsed.push({
-          id,
-          name: cleanName || id,
-          tier,
-          cli: 'agy',
-          description: `${cleanName} (${tier}) via Antigravity CLI`
-        })
+        const rawId = parts[0]?.trim() ?? ''
+        if (!/^[a-z0-9][\w.:-]*$/i.test(rawId) || !/\d/.test(rawId)) continue
+        const labelPart = parts[1]?.trim() ?? rawId
+
+        // Extract effort suffix (`-high`, `-medium`, `-low`) from model ID
+        const effortMatch = rawId.match(/^(.*?)-(low|medium|high)$/i)
+        const baseId = effortMatch ? effortMatch[1] : rawId
+        const effortVal = (effortMatch ? effortMatch[2].toLowerCase() : 'medium') as EffortLevel
+        const cleanName = labelPart.replace(/\s*\([^)]+\)\s*$/, '').trim() || baseId
+
+        const existing = grouped.get(baseId)
+        if (existing) {
+          if (!existing.efforts.includes(effortVal)) {
+            existing.efforts.push(effortVal)
+            const order: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max']
+            existing.efforts.sort((a, b) => order.indexOf(a) - order.indexOf(b))
+          }
+          existing.effortModelMap = { ...(existing.effortModelMap ?? {}), [effortVal]: rawId }
+          if (effortVal === 'high') existing.defaultEffort = 'high'
+        } else {
+          const tier = /argon/i.test(baseId)
+            ? 'Flagship'
+            : /flash/i.test(baseId)
+              ? 'Fast'
+              : /opus/i.test(baseId)
+                ? 'Opus'
+                : /sonnet/i.test(baseId)
+                  ? 'Sonnet'
+                  : 'Model'
+          grouped.set(baseId, {
+            id: baseId,
+            name: cleanName,
+            tier,
+            cli: 'agy',
+            description: `${cleanName} via Antigravity CLI`,
+            efforts: [effortVal],
+            defaultEffort: effortVal,
+            effortModelMap: { [effortVal]: rawId }
+          })
+        }
       }
-      dynamicAgyModels = parsed
-      resolve(parsed)
+      const parsed = Array.from(grouped.values())
+      // Put Gemini 4 Argon first
+      const argon = parsed.find((x) => x.id === 'gemini-4-argon')
+      dynamicAgyModels = argon ? [argon, ...parsed.filter((x) => x.id !== 'gemini-4-argon')] : parsed
+      resolve(dynamicAgyModels)
     }).stdin?.end()
   })
 }
@@ -819,7 +1025,10 @@ function loadClaudeCatalogModels(): CliModel[] {
             description?: string
             section?: string
             badge?: { message?: string }
-            runtime?: { default_effort?: string }
+            runtime?: {
+              default_effort?: string
+              effort_levels?: string[]
+            }
           }[]
         }
       }
@@ -827,21 +1036,54 @@ function loadClaudeCatalogModels(): CliModel[] {
     const list = raw.catalog?.config?.models
     if (!list?.length) return CATALOG_MODELS.claude
 
+    const validEfforts = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max'])
     return list.map((m) => {
-      const effort = m.runtime?.default_effort ?? 'high'
-      const tier = effort === 'xhigh' || effort === 'max' ? 'Max' : effort === 'high' ? 'High' : 'Medium'
+      const rawEfforts = (m.runtime?.effort_levels ?? ['low', 'medium', 'high', 'xhigh', 'max']).filter((e): e is EffortLevel =>
+        validEfforts.has(e as EffortLevel)
+      )
+      const efforts: EffortLevel[] = rawEfforts.length ? rawEfforts : ['low', 'medium', 'high']
+      const defRaw = (m.runtime?.default_effort ?? 'medium') as EffortLevel
+      const defaultEffort: EffortLevel = efforts.includes(defRaw) ? defRaw : efforts[0]
       const badgeText = m.badge?.message ? ` · ${m.badge.message}` : ''
+      const tier = m.badge?.message ? 'Credits' : /haiku/i.test(m.id) ? 'Fast' : '1M ctx'
       return {
         id: m.id,
         name: m.name.startsWith('Claude ') ? m.name : `Claude ${m.name}`,
         tier,
         cli: 'claude' as const,
-        description: `${m.description || m.name}${badgeText}`
+        description: `${m.description || m.name}${badgeText}`,
+        efforts,
+        defaultEffort
       }
     })
   } catch {
     return CATALOG_MODELS.claude
   }
+}
+
+/** Resolve a base model ID + effort level into the exact CLI `--model` string and `--effort` flag. */
+export function resolveCliModelWithEffort(
+  cli: CliId,
+  modelId: string,
+  effort: EffortLevel
+): { cliModelArg: string; effortArg: EffortLevel } {
+  const cleanEffort: EffortLevel = ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort) ? effort : 'high'
+  if (cli === 'agy') {
+    // Strip any existing `-low|-medium|-high` suffix first
+    const base = modelId.replace(/-(low|medium|high)$/i, '') || 'gemini-4-argon'
+    const allAgy = dynamicAgyModels?.length ? dynamicAgyModels : CATALOG_MODELS.agy
+    const found = allAgy.find((m) => m.id === base)
+    const agyEffort: EffortLevel = cleanEffort === 'xhigh' || cleanEffort === 'max' ? 'high' : cleanEffort
+    if (found?.effortModelMap) {
+      const mapped =
+        found.effortModelMap[agyEffort] ||
+        found.effortModelMap[found.defaultEffort] ||
+        Object.values(found.effortModelMap)[0]
+      if (mapped) return { cliModelArg: mapped, effortArg: agyEffort }
+    }
+    return { cliModelArg: `${base}-${agyEffort}`, effortArg: agyEffort }
+  }
+  return { cliModelArg: modelId, effortArg: cleanEffort }
 }
 
 export const clis = {
@@ -917,11 +1159,7 @@ export const clis = {
 
       if (m.id === 'agy' && exePath) {
         const dyn = await loadDynamicAgyModels(exePath)
-        if (dyn.length > 0) {
-          // Put Gemini 4 Argon High first, followed by the rest of `agy models`
-          const argonHigh = dyn.find((x) => x.id === 'gemini-4-argon-high')
-          models = argonHigh ? [argonHigh, ...dyn.filter((x) => x.id !== 'gemini-4-argon-high')] : dyn
-        }
+        if (dyn.length > 0) models = dyn
       } else if (m.id === 'claude') {
         models = loadClaudeCatalogModels()
       }

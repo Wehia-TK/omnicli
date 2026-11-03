@@ -6,6 +6,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  Gauge,
   GitBranch,
   Lock,
   Mic,
@@ -21,6 +22,7 @@ import type {
   CheckoutMode,
   CliId,
   CliSubscriptionStatus,
+  EffortLevel,
   KnowledgeEntry,
   MentionItem,
   PermissionMode,
@@ -37,7 +39,9 @@ interface SubscriptionComposerProps {
   clis: CliSubscriptionStatus[]
   selectedCli: CliId
   selectedModel: string
+  selectedEffort: EffortLevel
   onSelectCliModel: (cli: CliId, model: string) => void
+  onChangeEffort: (effort: EffortLevel) => void
   permissionMode: PermissionMode
   onChangePermissionMode: (m: PermissionMode) => void
   checkoutMode: CheckoutMode
@@ -61,6 +65,14 @@ const PERMISSION_MODES: { id: PermissionMode; label: string; desc: string }[] = 
   { id: 'bypass', label: 'Full Auto', desc: 'Bypass permission prompts for unattended runs' },
   { id: 'plan', label: 'Plan Only', desc: 'Read & design a plan without modifying files' }
 ]
+
+export const EFFORT_META: Record<EffortLevel, { label: string; short: string; desc: string }> = {
+  low: { label: 'Low', short: 'Low', desc: 'Fastest responses · minimal thinking tokens & lowest quota usage' },
+  medium: { label: 'Medium', short: 'Medium', desc: 'Balanced reasoning depth and speed (Recommended for everyday work)' },
+  high: { label: 'High', short: 'High', desc: 'Deep multi-step reasoning for complex architecture & debugging' },
+  xhigh: { label: 'Extra High', short: 'Extra', desc: 'Extended thinking budget for hard engineering problems' },
+  max: { label: 'Max', short: 'Max', desc: 'Maximum reasoning effort · consumes significantly more 5h quota' }
+}
 
 interface FixedMenuPos {
   left: number
@@ -103,7 +115,9 @@ export function SubscriptionComposer({
   clis,
   selectedCli,
   selectedModel,
+  selectedEffort,
   onSelectCliModel,
+  onChangeEffort,
   permissionMode,
   onChangePermissionMode,
   checkoutMode,
@@ -122,7 +136,7 @@ export function SubscriptionComposer({
 }: SubscriptionComposerProps): React.JSX.Element {
   const [text, setText] = useState('')
   const [mentions, setMentions] = useState<MentionItem[]>([])
-  const [openMenu, setOpenMenu] = useState<'project' | 'model' | 'mode' | 'checkout' | 'attach' | null>(null)
+  const [openMenu, setOpenMenu] = useState<'project' | 'model' | 'effort' | 'mode' | 'checkout' | 'attach' | null>(null)
   const [menuPos, setMenuPos] = useState<FixedMenuPos>({ left: 0, top: 0, maxHeight: 340 })
   const [previewCliId, setPreviewCliId] = useState<CliId>(selectedCli)
   const [fileFilter, setFileFilter] = useState('')
@@ -133,6 +147,7 @@ export function SubscriptionComposer({
   const projectBtnRef = useRef<HTMLButtonElement>(null)
   const attachBtnRef = useRef<HTMLButtonElement>(null)
   const modelBtnRef = useRef<HTMLButtonElement>(null)
+  const effortBtnRef = useRef<HTMLButtonElement>(null)
   const modeBtnRef = useRef<HTMLButtonElement>(null)
   const checkoutBtnRef = useRef<HTMLButtonElement>(null)
 
@@ -156,7 +171,7 @@ export function SubscriptionComposer({
   }, [])
 
   const toggleMenu = (
-    which: 'project' | 'model' | 'mode' | 'checkout' | 'attach',
+    which: 'project' | 'model' | 'effort' | 'mode' | 'checkout' | 'attach',
     btn: HTMLElement | null,
     width: number,
     height = 360,
@@ -176,12 +191,22 @@ export function SubscriptionComposer({
   const activeModelObj =
     activeSub?.models.find((m) => m.id === selectedModel) ??
     activeSub?.models[0] ?? {
-      id: selectedModel || 'gemini-4-argon-high',
+      id: selectedModel || 'gemini-4-argon',
       name: 'Gemini 4 Argon',
-      tier: 'High',
+      tier: 'Flagship',
       cli: selectedCli,
-      description: ''
+      description: '',
+      efforts: ['low', 'medium', 'high'] as EffortLevel[],
+      defaultEffort: 'high' as EffortLevel
     }
+
+  const availableEfforts: EffortLevel[] = activeModelObj.efforts?.length
+    ? activeModelObj.efforts
+    : ['low', 'medium', 'high']
+
+  const effectiveEffort: EffortLevel = availableEfforts.includes(selectedEffort)
+    ? selectedEffort
+    : activeModelObj.defaultEffort || availableEfforts[availableEfforts.length - 1] || 'high'
 
   const pinnedKbCount = knowledgeEntries.filter((k) => k.pinned).length
 
@@ -342,8 +367,8 @@ export function SubscriptionComposer({
 
         {/* Bottom Toolbar inside Composer Box */}
         <div className="mt-2 flex items-center justify-between gap-2 pt-1">
-          {/* Left Controls: `+` and `Gemini 4 Argon High v` */}
-          <div className="flex items-center gap-1.5">
+          {/* Left Controls: `+`, Model Selector (`Gemini 4 Argon v`), and Separate Effort Selector (`High v`) */}
+          <div className="flex flex-wrap items-center gap-1">
             <button
               ref={attachBtnRef}
               type="button"
@@ -354,11 +379,12 @@ export function SubscriptionComposer({
               <Plus size={16} />
             </button>
 
-            {/* Unified Subscription & Model Selector Button */}
+            {/* 1. Subscription & Base Model Selector Button */}
             <button
               ref={modelBtnRef}
               type="button"
               onClick={() => toggleMenu('model', modelBtnRef.current, 520, 380)}
+              title="Select AI Subscription & Model"
               className={cx(
                 'inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[13.5px] transition-colors',
                 openMenu === 'model'
@@ -368,8 +394,25 @@ export function SubscriptionComposer({
             >
               <CliAvatar cli={selectedCli} size={15} />
               <span className="font-medium text-zinc-100">{activeModelObj.name}</span>
-              {activeModelObj.tier && <span className="text-zinc-500">{activeModelObj.tier}</span>}
               <ChevronDown size={13} className="text-zinc-500" />
+            </button>
+
+            {/* 2. Separate Effort Level Selector Button */}
+            <button
+              ref={effortBtnRef}
+              type="button"
+              onClick={() => toggleMenu('effort', effortBtnRef.current, 270, 290)}
+              title="Select Reasoning Effort Level (independent of model)"
+              className={cx(
+                'inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[13px] transition-colors',
+                openMenu === 'effort'
+                  ? 'border-indigo-400/50 bg-indigo-500/15 text-white'
+                  : 'border-white/[0.07] bg-white/[0.03] text-zinc-300 hover:bg-white/[0.08] hover:text-white'
+              )}
+            >
+              <Gauge size={13} className="text-indigo-400" />
+              <span className="font-medium">{EFFORT_META[effectiveEffort]?.short ?? 'High'}</span>
+              <ChevronDown size={12} className="text-zinc-500" />
             </button>
           </div>
 
@@ -480,7 +523,7 @@ export function SubscriptionComposer({
           FIXED VIEWPORT POPOVERS (Never clipped by parent overflow containers!)
          ===================================================================== */}
 
-      {/* 1. 2-Pane Split Model & Subscription Selector Popover */}
+      {/* 1. 2-Pane Split Subscription & Base Model Selector Popover */}
       {openMenu === 'model' && previewSub && (
         <div
           style={{
@@ -574,7 +617,7 @@ export function SubscriptionComposer({
             </div>
           </div>
 
-          {/* Right Pane: Models & Live Quota for Selected Subscription */}
+          {/* Right Pane: Base Models & Live Quota for Selected Subscription */}
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
             {/* Subscription Live Quota Header */}
             <div className="border-b border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5">
@@ -634,7 +677,7 @@ export function SubscriptionComposer({
               )}
             </div>
 
-            {/* Scrollable Models List */}
+            {/* Scrollable Deduplicated Base Models List */}
             <div className="flex-1 space-y-0.5 overflow-y-auto p-2">
               {previewSub.models.map((m) => {
                 const locked = !previewSub.authenticated
@@ -647,6 +690,9 @@ export function SubscriptionComposer({
                     onClick={() => {
                       if (locked) return
                       onSelectCliModel(previewSub.id, m.id)
+                      if (m.efforts?.length && !m.efforts.includes(selectedEffort)) {
+                        onChangeEffort(m.defaultEffort || m.efforts[m.efforts.length - 1])
+                      }
                       setOpenMenu(null)
                     }}
                     className={cx(
@@ -662,9 +708,11 @@ export function SubscriptionComposer({
                       <div className="flex items-center gap-1.5">
                         {locked && <Lock size={11} className="shrink-0 text-zinc-500" />}
                         <span className="truncate text-[13px] font-medium">{m.name}</span>
-                        <span className="rounded bg-white/[0.07] px-1.5 py-0.2 text-[10.5px] text-zinc-400">
-                          {m.tier}
-                        </span>
+                        {m.tier && (
+                          <span className="rounded bg-white/[0.07] px-1.5 py-0.2 text-[10px] text-zinc-400">
+                            {m.tier}
+                          </span>
+                        )}
                       </div>
                       {m.description && (
                         <p className="mt-0.5 truncate text-[11px] text-zinc-500">{m.description}</p>
@@ -679,7 +727,63 @@ export function SubscriptionComposer({
         </div>
       )}
 
-      {/* 2. Project Selector Popover */}
+      {/* 2. Separate Effort Level Selector Popover */}
+      {openMenu === 'effort' && (
+        <div
+          style={{
+            position: 'fixed',
+            left: menuPos.left,
+            top: menuPos.top,
+            bottom: menuPos.bottom,
+            maxHeight: menuPos.maxHeight,
+            width: 280
+          }}
+          className="z-[100] overflow-y-auto rounded-xl border border-white/[0.14] bg-[#181920] p-2 shadow-2xl"
+        >
+          <div className="mb-1 flex items-center justify-between px-2 py-0.5">
+            <span className="text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
+              Reasoning Effort Level
+            </span>
+            <span className="text-[10.5px] text-zinc-500">{activeModelObj.name}</span>
+          </div>
+          <div className="space-y-0.5">
+            {availableEfforts.map((ef) => {
+              const info = EFFORT_META[ef]
+              const isSelected = ef === effectiveEffort
+              const isDefault = ef === activeModelObj.defaultEffort
+              return (
+                <button
+                  key={ef}
+                  type="button"
+                  onClick={() => {
+                    onChangeEffort(ef)
+                    setOpenMenu(null)
+                  }}
+                  className={cx(
+                    'flex w-full cursor-pointer items-start justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                    isSelected ? 'bg-indigo-500/20 text-white' : 'text-zinc-300 hover:bg-white/[0.06]'
+                  )}
+                >
+                  <div>
+                    <div className="flex items-center gap-1.5 text-[13px] font-medium">
+                      <span>{info.label}</span>
+                      {isDefault && (
+                        <span className="rounded bg-white/[0.08] px-1.5 py-0.2 text-[10px] font-normal text-zinc-400">
+                           Default
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-snug text-zinc-500">{info.desc}</div>
+                  </div>
+                  {isSelected && <Check size={14} className="mt-0.5 shrink-0 text-indigo-400" />}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 3. Project Selector Popover */}
       {openMenu === 'project' && (
         <div
           style={{
@@ -729,7 +833,7 @@ export function SubscriptionComposer({
         </div>
       )}
 
-      {/* 3. Attach / Reference Popover */}
+      {/* 4. Attach / Reference Popover */}
       {openMenu === 'attach' && (
         <div
           style={{
@@ -802,7 +906,7 @@ export function SubscriptionComposer({
         </div>
       )}
 
-      {/* 4. Permission Mode Popover */}
+      {/* 5. Permission Mode Popover */}
       {openMenu === 'mode' && (
         <div
           style={{
@@ -815,9 +919,7 @@ export function SubscriptionComposer({
           }}
           className="z-[100] overflow-y-auto rounded-xl border border-white/[0.14] bg-[#181920] p-1.5 shadow-2xl"
         >
-          <div className="px-2.5 py-1 text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">
-            CLI Execution Mode
-          </div>
+          <div className="px-2.5 py-1 text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">Permission Mode</div>
           {PERMISSION_MODES.map((pm) => (
             <button
               key={pm.id}
@@ -827,21 +929,21 @@ export function SubscriptionComposer({
                 setOpenMenu(null)
               }}
               className={cx(
-                'flex w-full cursor-pointer items-start justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors',
+                'flex w-full cursor-pointer items-start justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
                 pm.id === permissionMode ? 'bg-white/[0.09] text-white' : 'text-zinc-300 hover:bg-white/[0.05]'
               )}
             >
               <div>
-                <div className="text-[12.5px] font-medium">{pm.label}</div>
-                <div className="text-[11px] text-zinc-500">{pm.desc}</div>
+                <div className="text-[13px] font-medium">{pm.label}</div>
+                <div className="muted text-[11px]">{pm.desc}</div>
               </div>
-              {pm.id === permissionMode && <Check size={13} className="mt-0.5 shrink-0 text-indigo-400" />}
+              {pm.id === permissionMode && <Check size={14} className="mt-0.5 shrink-0 text-indigo-400" />}
             </button>
           ))}
         </div>
       )}
 
-      {/* 5. Checkout Mode Popover */}
+      {/* 6. Checkout / Worktree Selector Popover */}
       {openMenu === 'checkout' && (
         <div
           style={{
@@ -854,6 +956,7 @@ export function SubscriptionComposer({
           }}
           className="z-[100] overflow-y-auto rounded-xl border border-white/[0.14] bg-[#181920] p-1.5 shadow-2xl"
         >
+          <div className="px-2.5 py-1 text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">Workspace Target</div>
           <button
             type="button"
             onClick={() => {
@@ -866,14 +969,12 @@ export function SubscriptionComposer({
             )}
           >
             <div>
-              <div className="flex items-center gap-1.5 text-[12.5px] font-medium">
+              <div className="flex items-center gap-1.5 text-[13px] font-medium">
                 <Monitor size={13} /> Local Checkout
               </div>
-              <div className="mt-0.5 text-[11px] text-zinc-400">
-                Works directly in {currentProject?.folder || 'the project folder'}
-              </div>
+              <div className="muted mt-0.5 text-[11px]">Run directly in the project folder for instant live edits</div>
             </div>
-            {checkoutMode === 'local' && <Check size={13} className="mt-0.5 shrink-0 text-indigo-400" />}
+            {checkoutMode === 'local' && <Check size={14} className="mt-0.5 shrink-0 text-indigo-400" />}
           </button>
 
           <button
@@ -888,14 +989,14 @@ export function SubscriptionComposer({
             )}
           >
             <div>
-              <div className="flex items-center gap-1.5 text-[12.5px] font-medium">
+              <div className="flex items-center gap-1.5 text-[13px] font-medium">
                 <GitBranch size={13} className="text-emerald-400" /> Isolated Git Worktree
               </div>
-              <div className="mt-0.5 text-[11px] text-zinc-400">
-                Creates a separate branch & folder so your local copy stays untouched until you merge
+              <div className="muted mt-0.5 text-[11px]">
+                Creates a dedicated branch &amp; worktree so your main checkout stays untouched until you merge
               </div>
             </div>
-            {checkoutMode === 'worktree' && <Check size={13} className="mt-0.5 shrink-0 text-indigo-400" />}
+            {checkoutMode === 'worktree' && <Check size={14} className="mt-0.5 shrink-0 text-indigo-400" />}
           </button>
         </div>
       )}

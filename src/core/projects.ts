@@ -1,8 +1,8 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import type { CheckoutMode, CliId, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, TaskChanges } from '@shared/types'
-import { findCliExecutable, recordCliRateEvent, recordCliUsage } from './clis'
+import type { CheckoutMode, CliId, EffortLevel, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, TaskChanges } from '@shared/types'
+import { findCliExecutable, recordCliRateEvent, recordCliUsage, resolveCliModelWithEffort } from './clis'
 import { all, get, notifyChanged, nowLocal, run, transaction } from './db'
 import { buildKnowledgePrompt, recordAiHandoff, syncKnowledgeToDir } from './knowledge'
 import { getSettings } from './settings'
@@ -185,11 +185,16 @@ function resolveCliFor(t: ProjectTask, p: Project): CliId {
 function resolveModelFor(cli: CliId, t: ProjectTask, p: Project): string {
   const chosen = (t.model || p.default_model || '').trim()
   if (chosen && /^[\w.:[\]-]*$/.test(chosen)) return chosen
-  if (cli === 'agy') return 'gemini-4-argon-high'
+  if (cli === 'agy') return 'gemini-4-argon'
   if (cli === 'claude') return 'claude-opus-5-5'
   if (cli === 'codex') return 'gpt-5.2-codex'
   if (cli === 'gemini') return 'gemini-4-argon'
   return 'claude-sonnet-5-5'
+}
+
+function resolveEffortFor(t: ProjectTask, p: Project): EffortLevel {
+  const e = (t.effort || p.default_effort || 'high').trim().toLowerCase() as EffortLevel
+  return ['low', 'medium', 'high', 'xhigh', 'max'].includes(e) ? e : 'high'
 }
 
 function formatMentionsContext(mentionsRaw: string, projectFolder: string): string {
@@ -388,7 +393,9 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
   const exe = findCliExecutable('claude')
   if (!exe) throw new Error('Claude Code CLI is not installed or not found. Configure its path in Settings.')
 
-  const model = resolveModelFor('claude', t, p)
+  const baseModel = resolveModelFor('claude', t, p)
+  const effort = resolveEffortFor(t, p)
+  const { cliModelArg: model, effortArg } = resolveCliModelWithEffort('claude', baseModel, effort)
   const prompt = buildFullPrompt('claude', t, p, ask, cwd)
   const permMode =
     t.permission_mode === 'bypass'
@@ -399,6 +406,7 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
 
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', permMode]
   if (model) args.push('--model', model)
+  if (effortArg) args.push('--effort', effortArg)
   if (t.session_id) args.push('--resume', t.session_id)
 
   const env = { ...process.env }
@@ -411,11 +419,12 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
 
   running.set(t.id, child)
   run(
-    "UPDATE project_tasks SET run_state = 'running', runner = 'claude', model = ?, error = '', check_state = '', check_output = '', runs = runs + 1 WHERE id = ?",
-    model,
+    "UPDATE project_tasks SET run_state = 'running', runner = 'claude', model = ?, effort = ?, error = '', check_state = '', check_output = '', runs = runs + 1 WHERE id = ?",
+    baseModel,
+    effortArg,
     t.id
   )
-  appendLog(t.id, 'info', `Claude Code (${model}) started in ${t.checkout_mode === 'worktree' ? t.branch : 'local checkout'}`, 'claude', model)
+  appendLog(t.id, 'info', `Claude Code (${baseModel} · ${effortArg} effort) started in ${t.checkout_mode === 'worktree' ? t.branch : 'local checkout'}`, 'claude', `${baseModel} (${effortArg})`)
 
   const startedAt = Date.now()
   let buf = ''
@@ -597,7 +606,9 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     throw new Error(`${cliDisplayName(cli)} CLI isn't installed or authenticated. Check your subscription status in the selector bar.`)
   }
 
-  const model = resolveModelFor(cli, t, p)
+  const baseModel = resolveModelFor(cli, t, p)
+  const effort = resolveEffortFor(t, p)
+  const { cliModelArg: model, effortArg } = resolveCliModelWithEffort(cli, baseModel, effort)
   const prompt = buildFullPrompt(cli, t, p, ask, cwd).slice(0, 24_000)
 
   let args: string[] = []
@@ -609,7 +620,8 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     if (t.agy_conversation) args.push('--conversation', t.agy_conversation)
     if (model) args.push('--model', model)
   } else if (cli === 'codex') {
-    args = ['exec', '--model', model, prompt]
+    const codexEffort = effortArg === 'xhigh' || effortArg === 'max' ? 'high' : effortArg
+    args = ['exec', '--model', model, '-c', `model_reasoning_effort="${codexEffort}"`, prompt]
   } else if (cli === 'gemini') {
     args = ['-p', prompt, '--model', model]
   } else {
@@ -628,12 +640,13 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
 
   running.set(t.id, child)
   run(
-    "UPDATE project_tasks SET run_state = 'running', runner = ?, model = ?, error = '', check_state = '', check_output = '', runs = runs + 1 WHERE id = ?",
+    "UPDATE project_tasks SET run_state = 'running', runner = ?, model = ?, effort = ?, error = '', check_state = '', check_output = '', runs = runs + 1 WHERE id = ?",
     cli,
-    model,
+    baseModel,
+    effortArg,
     t.id
   )
-  appendLog(t.id, 'info', `${cliDisplayName(cli)} (${model}) is working in ${t.checkout_mode === 'worktree' ? t.branch : 'local checkout'}`, cli, model)
+  appendLog(t.id, 'info', `${cliDisplayName(cli)} (${baseModel} · ${effortArg} effort) is working in ${t.checkout_mode === 'worktree' ? t.branch : 'local checkout'}`, cli, `${baseModel} (${effortArg})`)
 
   const startedAt = Date.now()
   let buf = ''
@@ -938,6 +951,7 @@ export const projects = {
     kind?: 'thread' | 'task'
     cli: CliId
     model: string
+    effort?: EffortLevel
     permissionMode: PermissionMode
     checkoutMode: CheckoutMode
     mentions?: MentionItem[]
@@ -951,11 +965,12 @@ export const projects = {
     const extraNotes = opts.notes?.trim() || (text.includes('\n') ? text : '')
     const sort = get<{ s: number }>('SELECT COALESCE(MAX(sort) + 1, 1) AS s FROM project_tasks WHERE project_id = ?', p.id)!.s
     const mentionsJson = JSON.stringify(opts.mentions ?? [])
+    const effort = opts.effort ?? 'high'
 
     const id = run(
       `INSERT INTO project_tasks
-       (project_id, kind, title, notes, status, sort, created_at, cli, model, permission_mode, checkout_mode, mentions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (project_id, kind, title, notes, status, sort, created_at, cli, model, effort, permission_mode, checkout_mode, mentions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       p.id,
       kind,
       firstLine,
@@ -965,12 +980,13 @@ export const projects = {
       nowLocal(),
       opts.cli,
       opts.model,
+      effort,
       opts.permissionMode,
       opts.checkoutMode,
       mentionsJson
     )
 
-    appendLog(id, 'you', text, opts.cli, opts.model)
+    appendLog(id, 'you', text, opts.cli, `${opts.model} (${effort})`)
 
     if (opts.startImmediately !== false) {
       return projects.start(id, text)
@@ -980,18 +996,19 @@ export const projects = {
 
   saveTask: (
     t: Pick<ProjectTask, 'id' | 'title' | 'notes'> &
-      Partial<Pick<ProjectTask, 'cli' | 'model' | 'permission_mode' | 'checkout_mode'>>
+      Partial<Pick<ProjectTask, 'cli' | 'model' | 'effort' | 'permission_mode' | 'checkout_mode'>>
   ): ProjectTask => {
     if (!t.title.trim()) throw new Error('Write what the task is')
     const cur = getTask(t.id)
     run(
       `UPDATE project_tasks
-       SET title = ?, notes = ?, cli = ?, model = ?, permission_mode = ?, checkout_mode = ?
+       SET title = ?, notes = ?, cli = ?, model = ?, effort = ?, permission_mode = ?, checkout_mode = ?
        WHERE id = ?`,
       t.title.trim(),
       t.notes,
       t.cli ?? cur.cli,
       (t.model ?? cur.model).trim(),
+      t.effort ?? cur.effort ?? 'high',
       t.permission_mode ?? cur.permission_mode,
       t.checkout_mode ?? cur.checkout_mode,
       t.id
@@ -1079,18 +1096,19 @@ export const projects = {
   reply: (
     id: number,
     text: string,
-    opts?: { cli?: CliId; model?: string; permissionMode?: PermissionMode; mentions?: MentionItem[] }
+    opts?: { cli?: CliId; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode; mentions?: MentionItem[] }
   ): ProjectTask => {
     if (!text.trim()) throw new Error('Write a message first')
     if (running.has(id)) throw new Error('Still working on the current turn — wait or press Stop first.')
     const cur = getTask(id)
-    if (opts?.cli || opts?.model || opts?.permissionMode || opts?.mentions) {
+    if (opts?.cli || opts?.model || opts?.effort || opts?.permissionMode || opts?.mentions) {
       run(
         `UPDATE project_tasks
-         SET cli = ?, model = ?, permission_mode = ?, mentions = ?
+         SET cli = ?, model = ?, effort = ?, permission_mode = ?, mentions = ?
          WHERE id = ?`,
         opts.cli ?? cur.cli,
         opts.model ?? cur.model,
+        opts.effort ?? cur.effort ?? 'high',
         opts.permissionMode ?? cur.permission_mode,
         opts.mentions ? JSON.stringify(opts.mentions) : cur.mentions,
         id
@@ -1100,7 +1118,8 @@ export const projects = {
     const p = getProject(updated.project_id)
     const cli = resolveCliFor(updated, p)
     const model = resolveModelFor(cli, updated, p)
-    appendLog(id, 'you', text.trim(), cli, model)
+    const effort = resolveEffortFor(updated, p)
+    appendLog(id, 'you', text.trim(), cli, `${model} (${effort})`)
     executeWithCli(cli, updated, p, text.trim())
     return getTask(id)
   },

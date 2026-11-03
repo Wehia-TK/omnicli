@@ -3,6 +3,7 @@ import type {
   CheckoutMode,
   CliId,
   CliSubscriptionStatus,
+  EffortLevel,
   KnowledgeCategory,
   KnowledgeEntry,
   LogLine,
@@ -72,6 +73,7 @@ export const api = {
       kind?: 'thread' | 'task'
       cli: CliId
       model: string
+      effort?: EffortLevel
       permissionMode: PermissionMode
       checkoutMode: CheckoutMode
       mentions?: MentionItem[]
@@ -79,7 +81,7 @@ export const api = {
     }) => call<ProjectTask>('projects.createAndRun', opts),
     saveTask: (
       t: Pick<ProjectTask, 'id' | 'title' | 'notes'> &
-        Partial<Pick<ProjectTask, 'cli' | 'model' | 'permission_mode' | 'checkout_mode'>>
+        Partial<Pick<ProjectTask, 'cli' | 'model' | 'effort' | 'permission_mode' | 'checkout_mode'>>
     ) => call<ProjectTask>('projects.saveTask', t),
     setStatus: (id: number, status: ProjectTaskStatus) => call<ProjectTask>('projects.setStatus', id, status),
     reorder: (projectId: number, ids: number[]) => call<true>('projects.reorder', projectId, ids),
@@ -89,7 +91,7 @@ export const api = {
     reply: (
       id: number,
       text: string,
-      opts?: { cli?: CliId; model?: string; permissionMode?: PermissionMode; mentions?: MentionItem[] }
+      opts?: { cli?: CliId; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode; mentions?: MentionItem[] }
     ) => call<ProjectTask>('projects.reply', id, text, opts),
     stop: (id: number) => call<ProjectTask>('projects.stop', id),
     check: (id: number) => call<ProjectTask>('projects.check', id),

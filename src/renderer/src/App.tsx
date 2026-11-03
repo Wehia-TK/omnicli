@@ -35,6 +35,7 @@ import type {
   CheckoutMode,
   CliId,
   CliSubscriptionStatus,
+  EffortLevel,
   MentionItem,
   PermissionMode,
   Project,
@@ -68,7 +69,8 @@ export default function App(): React.JSX.Element {
 
   // Composer state
   const [selectedCli, setSelectedCli] = useState<CliId>('agy')
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-4-argon-high')
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-4-argon')
+  const [selectedEffort, setSelectedEffort] = useState<EffortLevel>('high')
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default')
   const [checkoutMode, setCheckoutMode] = useState<CheckoutMode>('local')
   const [submitMode, setSubmitMode] = useState<'thread' | 'task'>('thread')
@@ -89,6 +91,7 @@ export default function App(): React.JSX.Element {
       setSelectedProjectId(currentProject.id)
       if (currentProject.default_cli) setSelectedCli(currentProject.default_cli)
       if (currentProject.default_model) setSelectedModel(currentProject.default_model)
+      if (currentProject.default_effort) setSelectedEffort(currentProject.default_effort)
       if (currentProject.default_mode) setPermissionMode(currentProject.default_mode)
       if (currentProject.default_checkout) setCheckoutMode(currentProject.default_checkout)
     }
@@ -135,6 +138,7 @@ export default function App(): React.JSX.Element {
     if (p) {
       if (p.default_cli) setSelectedCli(p.default_cli)
       if (p.default_model) setSelectedModel(p.default_model)
+      if (p.default_effort) setSelectedEffort(p.default_effort)
       if (p.default_mode) setPermissionMode(p.default_mode)
       if (p.default_checkout) setCheckoutMode(p.default_checkout)
     }
@@ -160,6 +164,7 @@ export default function App(): React.JSX.Element {
         api.projects.reply(activeTask.id, prompt, {
           cli: selectedCli,
           model: selectedModel,
+          effort: selectedEffort,
           permissionMode,
           mentions
         })
@@ -174,6 +179,7 @@ export default function App(): React.JSX.Element {
         kind: mode,
         cli: selectedCli,
         model: selectedModel,
+        effort: selectedEffort,
         permissionMode,
         checkoutMode: mode === 'task' ? 'worktree' : checkoutMode,
         mentions,
@@ -512,10 +518,12 @@ export default function App(): React.JSX.Element {
                         clis={clis ?? []}
                         selectedCli={selectedCli}
                         selectedModel={selectedModel}
+                        selectedEffort={selectedEffort}
                         onSelectCliModel={(c, m) => {
                           setSelectedCli(c)
                           setSelectedModel(m)
                         }}
+                        onChangeEffort={setSelectedEffort}
                         permissionMode={permissionMode}
                         onChangePermissionMode={setPermissionMode}
                         checkoutMode={checkoutMode}
@@ -601,10 +609,12 @@ export default function App(): React.JSX.Element {
                           clis={clis ?? []}
                           selectedCli={selectedCli}
                           selectedModel={selectedModel}
+                          selectedEffort={selectedEffort}
                           onSelectCliModel={(c, m) => {
                             setSelectedCli(c)
                             setSelectedModel(m)
                           }}
+                          onChangeEffort={setSelectedEffort}
                           permissionMode={permissionMode}
                           onChangePermissionMode={setPermissionMode}
                           checkoutMode={activeTask.checkout_mode}
@@ -625,7 +635,7 @@ export default function App(): React.JSX.Element {
                           onRefreshClis={reloadClis}
                           isRunning={activeTask.run_state === 'running'}
                           onStop={() => act(api.projects.stop(activeTask.id), 'Stopped')}
-                          placeholder={`Reply or continue with ${selectedCli.toUpperCase()} (${selectedModel})…`}
+                          placeholder={`Reply or continue with ${selectedCli.toUpperCase()} (${selectedModel} · ${selectedEffort})…`}
                           onSubmit={handleComposerSubmit}
                         />
                       </div>
@@ -644,10 +654,12 @@ export default function App(): React.JSX.Element {
                     clis={clis ?? []}
                     selectedCli={selectedCli}
                     selectedModel={selectedModel}
+                    selectedEffort={selectedEffort}
                     onSelectCliModel={(c, m) => {
                       setSelectedCli(c)
                       setSelectedModel(m)
                     }}
+                    onChangeEffort={setSelectedEffort}
                     permissionMode={permissionMode}
                     onChangePermissionMode={setPermissionMode}
                     projectFiles={projectFiles ?? []}
@@ -1073,7 +1085,9 @@ function ProjectTaskQueueView({
   clis,
   selectedCli,
   selectedModel,
+  selectedEffort,
   onSelectCliModel,
+  onChangeEffort,
   permissionMode,
   onChangePermissionMode,
   projectFiles,
@@ -1088,7 +1102,9 @@ function ProjectTaskQueueView({
   clis: CliSubscriptionStatus[]
   selectedCli: CliId
   selectedModel: string
+  selectedEffort: EffortLevel
   onSelectCliModel: (c: CliId, m: string) => void
+  onChangeEffort: (e: EffortLevel) => void
   permissionMode: PermissionMode
   onChangePermissionMode: (m: PermissionMode) => void
   projectFiles: string[]
@@ -1269,7 +1285,9 @@ function ProjectTaskQueueView({
         clis={clis}
         selectedCli={selectedCli}
         selectedModel={selectedModel}
+        selectedEffort={selectedEffort}
         onSelectCliModel={onSelectCliModel}
+        onChangeEffort={onChangeEffort}
         permissionMode={permissionMode}
         onChangePermissionMode={onChangePermissionMode}
         checkoutMode="worktree"
@@ -1289,6 +1307,7 @@ function ProjectTaskQueueView({
               kind: 'task',
               cli: selectedCli,
               model: selectedModel,
+              effort: selectedEffort,
               permissionMode,
               checkoutMode: 'worktree',
               mentions,

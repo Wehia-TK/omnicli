@@ -1,5 +1,7 @@
 export type CliId = 'claude' | 'agy' | 'codex' | 'gemini' | 'copilot'
 
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
 export type PermissionMode = 'default' | 'accept-edits' | 'bypass' | 'plan'
 
 export type CheckoutMode = 'local' | 'worktree'
@@ -13,9 +15,12 @@ export type KnowledgeCategory = 'architecture' | 'conventions' | 'feature' | 'de
 export interface CliModel {
   id: string
   name: string
-  tier: string // e.g. 'High', 'Fast', 'Max', 'Default'
+  tier: string
   cli: CliId
   description: string
+  efforts: EffortLevel[]
+  defaultEffort: EffortLevel
+  effortModelMap?: Partial<Record<EffortLevel, string>>
 }
 
 export interface CliLimitInfo {
@@ -64,6 +69,7 @@ export interface Project {
   auto_run: number
   default_cli: CliId | ''
   default_model: string
+  default_effort?: EffortLevel
   default_mode: PermissionMode
   default_checkout: CheckoutMode
   sort: number
@@ -109,6 +115,7 @@ export interface ProjectTask {
   cli: '' | CliId
   runner: '' | CliId
   model: string
+  effort?: EffortLevel
   permission_mode: PermissionMode
   checkout_mode: CheckoutMode
   mentions: string // JSON string of MentionItem[]
