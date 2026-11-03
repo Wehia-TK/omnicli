@@ -7,10 +7,17 @@ import { initTerminal, stopAllTerminals } from '../core/terminal'
 
 let mainWindow: BrowserWindow | null = null
 
+let broadcastTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Coalesce DB-change pings: a streaming run writes many rows per second, the UI only needs ~4 refreshes/s. */
 function broadcastChanged(): void {
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('changed')
-  }
+  if (broadcastTimer) return
+  broadcastTimer = setTimeout(() => {
+    broadcastTimer = null
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('changed')
+    }
+  }, 250)
 }
 
 function createWindow(): void {
@@ -19,7 +26,7 @@ function createWindow(): void {
     height: 880,
     minWidth: 960,
     minHeight: 640,
-    backgroundColor: '#0b0c10',
+    backgroundColor: '#08090f',
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#00000000',

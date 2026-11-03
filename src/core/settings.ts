@@ -3,8 +3,11 @@ import { all, run, transaction } from './db'
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'dark',
-  defaultCli: 'agy',
-  defaultModel: 'gemini-4-argon-high',
+  defaultCli: 'claude',
+  defaultModel: 'claude-opus-5-5',
+  defaultEffort: 'medium',
+  kbPromptMode: 'compact',
+  useGraphify: true,
   defaultPermissionMode: 'default',
   defaultCheckoutMode: 'local',
   cliHandover: true,

@@ -2,7 +2,17 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type { CheckoutMode, CliId, EffortLevel, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, TaskChanges } from '@shared/types'
-import { findCliExecutable, recordCliRateEvent, recordCliUsage, resolveCliModelWithEffort } from './clis'
+import {
+  agyConversationTokens,
+  agyModelFamily,
+  findCliExecutable,
+  isCliReady,
+  modelsForCli,
+  recordCliRateEvent,
+  recordCliUsage,
+  resolveCliModelWithEffort
+} from './clis'
+import { skills } from './skills'
 import { all, get, notifyChanged, nowLocal, run, transaction } from './db'
 import { buildKnowledgePrompt, recordAiHandoff, syncKnowledgeToDir } from './knowledge'
 import { getSettings } from './settings'
@@ -179,22 +189,34 @@ const cliDisplayName = (c: CliId): string =>
   c === 'agy' ? 'Antigravity' : c === 'claude' ? 'Claude Code' : c === 'codex' ? 'OpenAI Codex' : c === 'gemini' ? 'Gemini CLI' : 'GitHub Copilot'
 
 function resolveCliFor(t: ProjectTask, p: Project): CliId {
-  return (t.cli || p.default_cli || getSettings().defaultCli || 'agy') as CliId
+  return (t.cli || p.default_cli || getSettings().defaultCli || 'claude') as CliId
 }
 
+const FALLBACK_MODEL: Record<CliId, string> = {
+  claude: 'claude-opus-5-5',
+  agy: 'gemini-4-argon',
+  codex: 'gpt-5.2-codex',
+  gemini: 'gemini-4-argon',
+  copilot: 'claude-sonnet-5-5'
+}
+
+/** The task's model only if it belongs to this CLI — after a handover the previous CLI's model id must not leak through. */
 function resolveModelFor(cli: CliId, t: ProjectTask, p: Project): string {
-  const chosen = (t.model || p.default_model || '').trim()
-  if (chosen && /^[\w.:[\]-]*$/.test(chosen)) return chosen
-  if (cli === 'agy') return 'gemini-4-argon'
-  if (cli === 'claude') return 'claude-opus-5-5'
-  if (cli === 'codex') return 'gpt-5.2-codex'
-  if (cli === 'gemini') return 'gemini-4-argon'
-  return 'claude-sonnet-5-5'
+  const known = modelsForCli(cli)
+  const valid = (m: string): boolean => Boolean(m) && /^[\w.:[\]-]*$/.test(m) && (!known.length || known.some((k) => k.id === m))
+  const s = getSettings()
+  const candidates = [t.model, p.default_cli === cli ? p.default_model : '', s.defaultCli === cli ? s.defaultModel : '']
+  for (const c of candidates) {
+    const m = (c || '').trim()
+    const clean = cli === 'agy' ? m.replace(/-(low|medium|high)$/i, '') : m
+    if (valid(clean)) return clean
+  }
+  return known[0]?.id ?? FALLBACK_MODEL[cli]
 }
 
 function resolveEffortFor(t: ProjectTask, p: Project): EffortLevel {
-  const e = (t.effort || p.default_effort || 'high').trim().toLowerCase() as EffortLevel
-  return ['low', 'medium', 'high', 'xhigh', 'max'].includes(e) ? e : 'high'
+  const e = (t.effort || p.default_effort || getSettings().defaultEffort || 'medium').trim().toLowerCase() as EffortLevel
+  return ['low', 'medium', 'high', 'xhigh', 'max'].includes(e) ? e : 'medium'
 }
 
 function formatMentionsContext(mentionsRaw: string, projectFolder: string): string {
@@ -228,7 +250,40 @@ function formatMentionsContext(mentionsRaw: string, projectFolder: string): stri
   return parts.join('\n\n')
 }
 
+/**
+ * Skills: Claude Code and Antigravity load installed skills natively, so they get a `/skill` invocation (cheapest —
+ * the CLI expands it itself). Every other CLI gets a one-line pointer to the SKILL.md file, never the whole text.
+ */
+function applySkills(cli: CliId, mentionsRaw: string, prompt: string): string {
+  let items: MentionItem[] = []
+  try {
+    items = JSON.parse(mentionsRaw || '[]')
+  } catch {
+    return prompt
+  }
+  const picked = items.filter((m) => m.type === 'skill')
+  if (!picked.length) return prompt
+  const known = skills.listAll()
+  const nativeCalls: string[] = []
+  const pointers: string[] = []
+  for (const m of picked) {
+    const info = known.find((k) => k.path === m.value) ?? known.find((k) => k.name === m.label)
+    if (info && info.native.includes(cli) && (cli === 'claude' || cli === 'agy')) nativeCalls.push(`/${info.name}`)
+    else pointers.push(`- ${m.label}: read and follow ${info?.path ?? m.value}`)
+  }
+  const head = [
+    nativeCalls.join(' '),
+    pointers.length ? `Use these skills (open each SKILL.md and follow its instructions):\n${pointers.join('\n')}` : ''
+  ].filter(Boolean)
+  // A native /skill call must be the first thing in the prompt for the CLI to expand it
+  return [...head, prompt].join(nativeCalls.length ? ' ' : '\n\n')
+}
+
 export function buildFullPrompt(cli: CliId, t: ProjectTask, p: Project, ask: string, cwd: string): string {
+  return applySkills(cli, t.mentions, buildPromptBody(cli, t, p, ask, cwd))
+}
+
+function buildPromptBody(cli: CliId, t: ProjectTask, p: Project, ask: string, cwd: string): string {
   const kbBlock = buildKnowledgePrompt(p.id, cwd)
   const mentionsBlock = formatMentionsContext(t.mentions, p.folder)
   const modeNote =
@@ -240,7 +295,11 @@ export function buildFullPrompt(cli: CliId, t: ProjectTask, p: Project, ask: str
 
   const lastRunner = t.runner
   // If continuing the exact same CLI conversation, keep the prompt concise
-  if (lastRunner === cli && ask && ((cli === 'claude' && t.session_id) || (cli === 'agy' && t.agy_conversation))) {
+  if (
+    lastRunner === cli &&
+    ask &&
+    ((cli === 'claude' && t.session_id) || (cli === 'agy' && t.agy_conversation) || (cli === 'codex' && t.codex_thread))
+  ) {
     return [ask.trim(), mentionsBlock].filter(Boolean).join('\n\n')
   }
 
@@ -254,12 +313,14 @@ export function buildFullPrompt(cli: CliId, t: ProjectTask, p: Project, ask: str
     } catch {
       // ignore git errors
     }
+    // Token-lean handoff: skip thinking/info noise and trim each line
     const recentLogs = projects
       .log(t.id)
-      .slice(-25)
-      .map((l) => `[${l.kind}] ${l.text}`)
+      .filter((l) => l.kind === 'you' || l.kind === 'text' || l.kind === 'tool' || l.kind === 'error')
+      .slice(-20)
+      .map((l) => `[${l.kind}] ${l.text.replace(/\s+/g, ' ').slice(0, 400)}`)
       .join('\n')
-      .slice(-3500)
+      .slice(-3000)
 
     return [
       `HANDOFF NOTICE: ${cliDisplayName(lastRunner)} worked on this before you. You are taking over seamlessly in ${cwd}.`,
@@ -295,9 +356,12 @@ function describeTool(name: string, input: Record<string, unknown>, cwd: string)
   return name
 }
 
+/** Only call this on error output — a normal answer that merely *discusses* rate limits must not trigger a handover. */
 export function turnedDownByLimit(rejected: boolean, text: string): boolean {
   if (rejected) return true
-  return /you['’]ve hit your|usage limit reached|rate limit exceeded|quota exceeded|out of .*usage|try again in \d/i.test(text)
+  return /you['’]ve hit your|usage limit reached|rate limit exceeded|quota exceeded|resource[_ ]exhausted|exhausted your|out of .*(usage|quota|credits)|429 too many|try again in \d/i.test(
+    text
+  )
 }
 
 function collectChangedFilePaths(t: ProjectTask): string[] {
@@ -414,7 +478,7 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
 
   const isCmd = /\.(cmd|bat)$/i.test(exe)
   const child = isCmd
-    ? spawn(`"${exe}" ${args.join(' ')}`, { shell: true, cwd, env, windowsHide: true })
+    ? spawn(`"${exe}" ${args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`, { shell: true, cwd, env, windowsHide: true })
     : spawn(exe, args, { cwd, env, windowsHide: true })
 
   running.set(t.id, child)
@@ -466,6 +530,7 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
         status?: string
         resetsAt?: number | string
         utilization?: number
+        rateLimitType?: string
       }
     }
     try {
@@ -476,16 +541,19 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
 
     if (ev.type === 'rate_limit_event' && ev.rate_limit_info) {
       const rli = ev.rate_limit_info
-      rateRejected = rli.status === 'rejected'
+      if (rli.status === 'rejected') rateRejected = true
       const statusMap = rli.status === 'rejected' ? 'rejected' : rli.status === 'allowed_warning' ? 'warning' : 'ok'
-      const utilPct = typeof rli.utilization === 'number' ? Math.round(rli.utilization * 100) : null
+      // utilization arrives as a 0–1 fraction (older builds) or a 0–100 percentage
+      const utilPct = typeof rli.utilization === 'number' ? Math.round(rli.utilization <= 1 ? rli.utilization * 100 : rli.utilization) : null
       const resetsIso =
         typeof rli.resetsAt === 'number'
-          ? new Date(rli.resetsAt * 1000).toISOString()
+          ? new Date(rli.resetsAt * (rli.resetsAt < 1e12 ? 1000 : 1)).toISOString()
           : typeof rli.resetsAt === 'string'
             ? rli.resetsAt
             : null
-      recordCliRateEvent('claude', statusMap, utilPct, resetsIso, rli.status || '')
+      // Weekly / per-model windows are shown from the live usage API; only the 5h window drives the main lock
+      const key = !rli.rateLimitType || rli.rateLimitType === 'five_hour' ? 'claude' : `claude:${rli.rateLimitType}`
+      recordCliRateEvent(key as CliId, statusMap, utilPct, resetsIso, rli.rateLimitType || rli.status || '')
     }
 
     if (ev.session_id && ev.type === 'system') {
@@ -561,13 +629,13 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
     const r = resultObj as { text: string; isError: boolean } | null
     if (cur.run_state !== 'running') {
       // manually stopped
-    } else if (r && !r.isError && !timedOut && !turnedDownByLimit(rateRejected, r.text)) {
+    } else if (r && !r.isError && !timedOut && !rateRejected) {
       if (r.text) run('UPDATE project_tasks SET result = ? WHERE id = ?', r.text, t.id)
       const freshProj = getProject(p.id)
       if (freshProj.check_cmd.trim() && cur.kind === 'task') runChecks(getTask(t.id), freshProj, 'claude', model)
       else finishRun(getTask(t.id), freshProj, 'claude', model)
     } else {
-      if (turnedDownByLimit(rateRejected, r?.text || err)) {
+      if (turnedDownByLimit(rateRejected, `${r?.isError ? r.text : ''}\n${err}`)) {
         recordCliRateEvent('claude', 'rejected', 100, null, '5-hour subscription limit reached')
       }
       const why = timedOut
@@ -596,47 +664,58 @@ function commitWorktreeEditsIfNeeded(t: ProjectTask, label: string): boolean {
   }
 }
 
-/** Launch Antigravity CLI (`agy`) or other supported CLIs (`gemini`, `codex`, `copilot`). */
+/** Launch Antigravity CLI (`agy`) or the other supported CLIs (`codex`, `gemini`, `copilot`). */
 function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: string, firstWhy: string): void {
   const cwd = resolveWorkingDir(startTask, p)
   const t = getTask(startTask.id)
-  let exe = findCliExecutable(cli)
-  if (!exe && cli === 'gemini') exe = findCliExecutable('agy')
+  const exe = findCliExecutable(cli)
   if (!exe) {
-    throw new Error(`${cliDisplayName(cli)} CLI isn't installed or authenticated. Check your subscription status in the selector bar.`)
+    throw new Error(`${cliDisplayName(cli)} CLI isn't installed. Install it or set its path in Settings.`)
   }
 
   const baseModel = resolveModelFor(cli, t, p)
   const effort = resolveEffortFor(t, p)
   const { cliModelArg: model, effortArg } = resolveCliModelWithEffort(cli, baseModel, effort)
-  const prompt = buildFullPrompt(cli, t, p, ask, cwd).slice(0, 24_000)
+  const prompt = buildFullPrompt(cli, t, p, ask, cwd)
 
+  // Prompts go through stdin wherever the CLI supports it: no 32k command-line limit and no shell-quoting bugs.
   let args: string[] = []
-  const isAgy = cli === 'agy' || (cli === 'gemini' && /agy\.exe$/i.test(exe))
+  let stdinPrompt: string | null = null
+  const isAgy = cli === 'agy'
   if (isAgy) {
     const agyMode = t.permission_mode === 'plan' ? 'plan' : t.permission_mode === 'bypass' ? 'auto' : 'accept-edits'
-    args = ['-p', prompt, '--output-format', 'stream-json', '--mode', agyMode, '--print-timeout', `${RUN_LIMIT_MS / 60_000}m`]
+    args = ['-p', prompt.slice(0, 24_000), '--output-format', 'stream-json', '--mode', agyMode, '--print-timeout', `${RUN_LIMIT_MS / 60_000}m`]
     if (t.permission_mode === 'bypass') args.push('--dangerously-skip-permissions')
-    if (t.agy_conversation) args.push('--conversation', t.agy_conversation)
+    if (t.agy_conversation && t.runner === 'agy') args.push('--conversation', t.agy_conversation)
     if (model) args.push('--model', model)
   } else if (cli === 'codex') {
-    const codexEffort = effortArg === 'xhigh' || effortArg === 'max' ? 'high' : effortArg
-    args = ['exec', '--model', model, '-c', `model_reasoning_effort="${codexEffort}"`, prompt]
+    const sandbox =
+      t.permission_mode === 'plan'
+        ? ['--sandbox', 'read-only']
+        : t.permission_mode === 'bypass'
+          ? ['--dangerously-bypass-approvals-and-sandbox']
+          : ['--full-auto']
+    const common = ['--json', '--skip-git-repo-check', '--model', model, '-c', `model_reasoning_effort="${effortArg}"`, ...sandbox]
+    args = t.codex_thread && t.runner === 'codex' ? ['exec', 'resume', ...common, t.codex_thread, '-'] : ['exec', ...common, '-']
+    stdinPrompt = prompt
   } else if (cli === 'gemini') {
-    args = ['-p', prompt, '--model', model]
+    const approval = t.permission_mode === 'plan' ? 'default' : t.permission_mode === 'bypass' ? 'yolo' : 'auto_edit'
+    args = ['--output-format', 'json', '--approval-mode', approval, '--model', model, '-p', ' ']
+    stdinPrompt = prompt
   } else {
-    args = ['-p', prompt]
+    args = ['-p', prompt.slice(0, 24_000), '--model', model]
+    if (t.permission_mode !== 'plan') args.push('--allow-all-tools')
   }
 
   const isCmd = /\.(cmd|bat)$/i.test(exe)
+  const stdio: ['pipe' | 'ignore', 'pipe', 'pipe'] = [stdinPrompt !== null ? 'pipe' : 'ignore', 'pipe', 'pipe']
   const child = isCmd
-    ? spawn(`"${exe}" ${args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`, {
-        shell: true,
-        cwd,
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-    : spawn(exe, args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    ? spawn(`"${exe}" ${args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`, { shell: true, cwd, windowsHide: true, stdio })
+    : spawn(exe, args, { cwd, windowsHide: true, stdio })
+  if (stdinPrompt !== null) {
+    child.stdin?.on('error', () => undefined)
+    child.stdin?.end(stdinPrompt)
+  }
 
   running.set(t.id, child)
   run(
@@ -646,7 +725,13 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     effortArg,
     t.id
   )
-  appendLog(t.id, 'info', `${cliDisplayName(cli)} (${baseModel} · ${effortArg} effort) is working in ${t.checkout_mode === 'worktree' ? t.branch : 'local checkout'}`, cli, `${baseModel} (${effortArg})`)
+  appendLog(
+    t.id,
+    'info',
+    `${cliDisplayName(cli)} (${baseModel} · ${effortArg} effort) is working in ${t.checkout_mode === 'worktree' ? t.branch : 'local checkout'}`,
+    cli,
+    `${baseModel} (${effortArg})`
+  )
 
   const startedAt = Date.now()
   let buf = ''
@@ -655,6 +740,7 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   let timedOut = false
   let streamTokens = 0
   let streamOk = true
+  let errorText = ''
 
   const limitTimer = setTimeout(() => {
     timedOut = true
@@ -667,6 +753,7 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
       const ev = JSON.parse(raw) as {
         event?: string
         conversation_id?: string
+        error?: { message?: string } | string
         step_update?: {
           conversation_id?: string
           state?: string
@@ -675,15 +762,11 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
           tool_name?: string
           usage?: { total_tokens?: number }
         }
-        result?: {
-          conversation_id?: string
-          status?: string
-          response?: string
-          usage?: { total_tokens?: number }
-        }
+        result?: { conversation_id?: string; status?: string; response?: string; error?: string; usage?: { total_tokens?: number } }
       }
       const cid = ev.conversation_id || ev.step_update?.conversation_id || ev.result?.conversation_id
       if (cid) run('UPDATE project_tasks SET agy_conversation = ? WHERE id = ?', cid, t.id)
+      if (ev.error) errorText += typeof ev.error === 'string' ? ev.error : (ev.error.message ?? '')
 
       if (ev.event === 'step_update' && ev.step_update) {
         const su = ev.step_update
@@ -691,19 +774,14 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
           outText += su.text_delta
           run('UPDATE project_tasks SET result = ? WHERE id = ?', outText, t.id)
         }
-        if (su.tool_name && su.state === 'ACTIVE') {
-          appendLog(t.id, 'tool', su.tool_name, cli, model)
-        }
-        if (su.usage?.total_tokens) {
-          streamTokens = Math.max(streamTokens, su.usage.total_tokens)
-        }
+        if (su.tool_name && su.state === 'ACTIVE') appendLog(t.id, 'tool', su.tool_name, cli, model)
+        if (su.usage?.total_tokens) streamTokens = Math.max(streamTokens, su.usage.total_tokens)
       }
       if (ev.event === 'result' && ev.result) {
         if (ev.result.response) outText = ev.result.response
         streamOk = !ev.result.status || ev.result.status === 'SUCCESS'
-        if (ev.result.usage?.total_tokens) {
-          streamTokens = Math.max(streamTokens, ev.result.usage.total_tokens)
-        }
+        if (!streamOk) errorText += ev.result.error ?? ev.result.response ?? ev.result.status ?? ''
+        if (ev.result.usage?.total_tokens) streamTokens = Math.max(streamTokens, ev.result.usage.total_tokens)
       }
       changedSoon()
     } catch {
@@ -711,9 +789,48 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     }
   }
 
+  /** `codex exec --json` emits one JSON event per line (thread.started, item.completed, turn.completed with usage). */
+  const handleCodexLine = (raw: string): void => {
+    if (!raw.trim()) return
+    try {
+      const ev = JSON.parse(raw) as {
+        type?: string
+        thread_id?: string
+        message?: string
+        item?: { type?: string; text?: string; command?: string; path?: string; changes?: { path?: string; kind?: string }[] }
+        usage?: { input_tokens?: number; cached_input_tokens?: number; output_tokens?: number }
+        error?: { message?: string }
+      }
+      if (ev.type === 'thread.started' && ev.thread_id) run('UPDATE project_tasks SET codex_thread = ? WHERE id = ?', ev.thread_id, t.id)
+      if (ev.type === 'item.completed' && ev.item) {
+        const it = ev.item
+        if (it.type === 'agent_message' && it.text) {
+          outText = it.text
+          appendLog(t.id, 'text', it.text, cli, model)
+          run('UPDATE project_tasks SET result = ? WHERE id = ?', it.text, t.id)
+        } else if (it.type === 'reasoning' && it.text) appendLog(t.id, 'thinking', it.text, cli, model)
+        else if (it.type === 'command_execution' && it.command) appendLog(t.id, 'tool', `$ ${it.command}`, cli, model)
+        else if (it.type === 'file_change' && it.changes?.length)
+          for (const c of it.changes) appendLog(t.id, 'tool', `${c.kind === 'add' ? 'Create' : c.kind === 'delete' ? 'Delete' : 'Edit'} ${c.path ?? ''}`, cli, model)
+      }
+      if (ev.type === 'turn.completed' && ev.usage) {
+        // cached input is billed far cheaper against limits — count only the uncached part
+        streamTokens += Math.max(0, (ev.usage.input_tokens ?? 0) - (ev.usage.cached_input_tokens ?? 0)) + (ev.usage.output_tokens ?? 0)
+      }
+      if (ev.type === 'turn.failed' || ev.type === 'error') {
+        streamOk = false
+        errorText += ev.error?.message ?? ev.message ?? 'Codex turn failed'
+      }
+      changedSoon()
+    } catch {
+      // non-JSON progress line
+    }
+  }
+
+  const lineHandler = isAgy ? handleAgyLine : cli === 'codex' ? handleCodexLine : null
   child.stdout?.setEncoding('utf8')
   child.stdout?.on('data', (d: string) => {
-    if (!isAgy) {
+    if (!lineHandler) {
       outText += d
       changedSoon()
       return
@@ -721,78 +838,101 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     buf += d
     let nl: number
     while ((nl = buf.indexOf('\n')) >= 0) {
-      handleAgyLine(buf.slice(0, nl))
+      lineHandler(buf.slice(0, nl))
       buf = buf.slice(nl + 1)
     }
   })
 
-  // Watch modified files in real-time so the stream UI shows live file edits as the CLI works
+  // CLIs without structured tool events: watch modified files so the stream shows live edits
   const seenFiles = new Map<string, string>()
-  const fileWatcher = setInterval(() => {
-    try {
-      for (const l of git(cwd, ['status', '--porcelain']).split('\n').filter(Boolean)) {
-        const file = l.slice(3).trim()
-        if (!file || seenFiles.get(file) === l) continue
-        seenFiles.set(file, l)
-        const action = l.startsWith('??') || l[1] === 'A' ? 'Create' : l[1] === 'D' ? 'Delete' : 'Edit'
-        appendLog(t.id, 'tool', `${action} ${file}`, cli, model)
-        changedSoon()
-      }
-    } catch {
-      // ignore if git busy
-    }
-  }, 2000)
+  const fileWatcher =
+    cli === 'codex'
+      ? null
+      : setInterval(() => {
+          try {
+            for (const l of git(cwd, ['status', '--porcelain']).split('\n').filter(Boolean)) {
+              const file = l.slice(3).trim()
+              if (!file || file.startsWith('.ai-kb') || seenFiles.get(file) === l) continue
+              seenFiles.set(file, l)
+              const action = l.startsWith('??') || l[1] === 'A' ? 'Create' : l[1] === 'D' ? 'Delete' : 'Edit'
+              appendLog(t.id, 'tool', `${action} ${file}`, cli, model)
+              changedSoon()
+            }
+          } catch {
+            // ignore if git busy / not a repo
+          }
+        }, 2500)
 
   child.stderr?.setEncoding('utf8')
   child.stderr?.on('data', (d: string) => (err = (err + d).slice(-4000)))
   child.on('error', (e) => (err += e.message))
   child.on('close', (code) => {
     clearTimeout(limitTimer)
-    clearInterval(fileWatcher)
-    if (isAgy && buf.trim()) handleAgyLine(buf)
+    if (fileWatcher) clearInterval(fileWatcher)
+    if (lineHandler && buf.trim()) lineHandler(buf)
     running.delete(t.id)
     const durationMs = Date.now() - startedAt
-    const finalTokens = streamTokens || Math.max(800, Math.round((prompt.length + outText.length) / 3.5))
-    run('UPDATE project_tasks SET run_ms = run_ms + ?, tokens = tokens + ? WHERE id = ?', durationMs, finalTokens, t.id)
 
-    recordCliUsage({
-      cli,
-      model,
-      projectId: p.id,
-      taskId: t.id,
-      tokens: finalTokens,
-      durationMs
-    })
+    // Gemini CLI `--output-format json` prints one object with the answer and token stats
+    if (cli === 'gemini') {
+      try {
+        const j = JSON.parse(outText.slice(outText.indexOf('{'))) as {
+          response?: string
+          error?: { message?: string }
+          stats?: { models?: Record<string, { tokens?: { total?: number; prompt?: number; candidates?: number; cached?: number } }> }
+        }
+        if (j.response) outText = j.response
+        if (j.error?.message) ((streamOk = false), (errorText += j.error.message))
+        for (const m of Object.values(j.stats?.models ?? {})) {
+          const tk = m.tokens ?? {}
+          streamTokens += tk.total ? tk.total - (tk.cached ?? 0) : (tk.prompt ?? 0) + (tk.candidates ?? 0)
+        }
+      } catch {
+        // plain text output
+      }
+    }
+
+    const tid = getTask(t.id)
+    const realAgyTokens = isAgy && tid.agy_conversation ? agyConversationTokens(tid.agy_conversation, startedAt) : 0
+    const finalTokens = realAgyTokens || streamTokens || Math.max(800, Math.round((prompt.length + outText.length) / 3.5))
+    run('UPDATE project_tasks SET run_ms = run_ms + ?, tokens = tokens + ? WHERE id = ?', durationMs, finalTokens, t.id)
+    recordCliUsage({ cli, model: baseModel, projectId: p.id, taskId: t.id, tokens: finalTokens, durationMs })
 
     const freshProj = getProject(p.id)
     const finalAnswer = outText.trim()
+    const failureText = `${errorText}\n${err}`
+    const failed = timedOut || code !== 0 || !streamOk
 
     if (getTask(t.id).run_state !== 'running') {
       // stopped by user
-    } else if (timedOut || code !== 0 || !streamOk || turnedDownByLimit(false, finalAnswer || err)) {
-      if (turnedDownByLimit(false, finalAnswer || err)) {
-        recordCliRateEvent(cli, 'rejected', 100, null, 'Subscription quota limit reached')
+    } else if (failed || turnedDownByLimit(false, errorText)) {
+      if (turnedDownByLimit(false, failureText)) {
+        if (isAgy) {
+          // Antigravity quotas are per model family — lock only that family
+          const fam = agyModelFamily(baseModel)
+          recordCliRateEvent(`agy:${fam.key}` as CliId, 'rejected', 100, null, `${fam.label} quota reached`)
+        } else {
+          recordCliRateEvent(cli, 'rejected', 100, null, 'Subscription quota limit reached')
+        }
       }
       const why = timedOut
         ? `Stopped after ${RUN_LIMIT_MS / 60_000} minutes.`
-        : (err.trim().split('\n').slice(-3).join(' ') || finalAnswer || `Stopped (exit ${code})`).slice(0, 1000)
+        : (errorText.trim() || err.trim().split('\n').slice(-3).join(' ') || finalAnswer || `Stopped (exit ${code})`).slice(0, 1000)
       handleStoppedRun(cli, getTask(t.id), freshProj, ask, why, firstWhy)
     } else {
-      if (finalAnswer) {
+      if (finalAnswer && cli !== 'codex') {
         appendLog(t.id, 'text', finalAnswer, cli, model)
         run('UPDATE project_tasks SET result = ? WHERE id = ?', finalAnswer, t.id)
       }
       commitWorktreeEditsIfNeeded(getTask(t.id), cliDisplayName(cli))
-      if (freshProj.check_cmd.trim() && getTask(t.id).kind === 'task') {
-        runChecks(getTask(t.id), freshProj, cli, model)
-      } else {
-        finishRun(getTask(t.id), freshProj, cli, model)
-      }
+      if (freshProj.check_cmd.trim() && getTask(t.id).kind === 'task') runChecks(getTask(t.id), freshProj, cli, model)
+      else finishRun(getTask(t.id), freshProj, cli, model)
     }
     notifier.changed()
   })
   notifier.changed()
 }
+
 
 export function parseCliOutput(out: string): { ok: boolean; text: string; conversation: string } {
   const raw = out.trim()
@@ -820,8 +960,9 @@ function executeWithCli(cli: CliId, t: ProjectTask, p: Project, ask: string, fir
 
 /** Automatic Subscription Handover: when one CLI stops or hits its rate limit, hand over to the other authenticated CLI on the same branch/folder! */
 function handleStoppedRun(from: CliId, t: ProjectTask, p: Project, ask: string, why: string, firstWhy: string): void {
-  const fallbackOrder: CliId[] = from === 'claude' ? ['agy', 'gemini'] : ['claude', 'agy']
-  const to = fallbackOrder.find((c) => c !== from && Boolean(findCliExecutable(c)))
+  // Only hand over to subscriptions that are installed AND signed in; Claude first, then the rest
+  const fallbackOrder: CliId[] = ['claude', 'agy', 'codex', 'gemini', 'copilot']
+  const to = fallbackOrder.find((c) => c !== from && isCliReady(c))
 
   if (firstWhy || !to || !getSettings().cliHandover) {
     if (firstWhy) run('UPDATE projects SET auto_run = 0 WHERE id = ?', p.id)
@@ -864,28 +1005,30 @@ export const projects = {
       const id = p.id
         ? (run(
             `UPDATE projects
-             SET name = ?, folder = ?, notes = ?, check_cmd = ?, default_cli = ?, default_model = ?, default_mode = ?, default_checkout = ?
+             SET name = ?, folder = ?, notes = ?, check_cmd = ?, default_cli = ?, default_model = ?, default_effort = ?, default_mode = ?, default_checkout = ?
              WHERE id = ?`,
             p.name.trim(),
             folder,
             p.notes ?? '',
             (p.check_cmd ?? '').trim(),
-            p.default_cli ?? '',
-            p.default_model ?? '',
+            p.default_cli ?? getSettings().defaultCli,
+            p.default_model ?? getSettings().defaultModel,
+            p.default_effort ?? getSettings().defaultEffort,
             p.default_mode ?? 'default',
             p.default_checkout ?? 'local',
             p.id
           ),
           p.id)
         : run(
-            `INSERT INTO projects (name, folder, notes, check_cmd, default_cli, default_model, default_mode, default_checkout, sort, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM projects), ?)`,
+            `INSERT INTO projects (name, folder, notes, check_cmd, default_cli, default_model, default_effort, default_mode, default_checkout, sort, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM projects), ?)`,
             p.name.trim(),
             folder,
             p.notes ?? '',
             (p.check_cmd ?? '').trim(),
-            p.default_cli ?? 'agy',
-            p.default_model ?? 'gemini-4-argon-high',
+            p.default_cli || getSettings().defaultCli,
+            p.default_model || getSettings().defaultModel,
+            p.default_effort ?? getSettings().defaultEffort,
             p.default_mode ?? 'default',
             p.default_checkout ?? 'local',
             nowLocal()
@@ -893,6 +1036,19 @@ export const projects = {
       if (folder) syncKnowledgeToDir(id, folder)
       return getProject(id)
     })
+  },
+
+  /** Remember the composer's last AI choice for this project (so model + effort stick between sessions). */
+  setDefaults: (id: number, d: { cli?: CliId; model?: string; effort?: EffortLevel }): Project => {
+    const cur = getProject(id)
+    run(
+      'UPDATE projects SET default_cli = ?, default_model = ?, default_effort = ? WHERE id = ?',
+      d.cli ?? cur.default_cli,
+      d.model ?? cur.default_model,
+      d.effort ?? cur.default_effort ?? 'medium',
+      id
+    )
+    return getProject(id)
   },
 
   archive: (id: number, archived = true): Project => {
@@ -965,7 +1121,7 @@ export const projects = {
     const extraNotes = opts.notes?.trim() || (text.includes('\n') ? text : '')
     const sort = get<{ s: number }>('SELECT COALESCE(MAX(sort) + 1, 1) AS s FROM project_tasks WHERE project_id = ?', p.id)!.s
     const mentionsJson = JSON.stringify(opts.mentions ?? [])
-    const effort = opts.effort ?? 'high'
+    const effort = opts.effort ?? getSettings().defaultEffort
 
     const id = run(
       `INSERT INTO project_tasks
@@ -1075,7 +1231,7 @@ export const projects = {
     projects.setStatus(id, 'doing')
 
     const cli = resolveCliFor(t, p)
-    if ((t.session_id || t.agy_conversation) && t.worktree && existsSync(t.worktree)) {
+    if ((t.session_id || t.agy_conversation || t.codex_thread) && t.worktree && existsSync(t.worktree)) {
       const again =
         initialAsk ||
         (t.check_state === 'failed'
@@ -1284,7 +1440,7 @@ export const projects = {
     removeWorktree(t, getProject(t.project_id))
     appendLog(id, 'info', 'Worktree branch discarded')
     run(
-      "UPDATE project_tasks SET worktree = NULL, branch = NULL, base_commit = NULL, session_id = NULL, agy_conversation = NULL, runner = '', run_state = '', result = '', error = '', check_state = '', check_output = '' WHERE id = ?",
+      "UPDATE project_tasks SET worktree = NULL, branch = NULL, base_commit = NULL, session_id = NULL, agy_conversation = NULL, codex_thread = NULL, runner = '', run_state = '', result = '', error = '', check_state = '', check_output = '' WHERE id = ?",
       id
     )
     return projects.setStatus(id, 'queued')

@@ -140,7 +140,7 @@ export function LiveLimitsModal({
                 key={sub.id}
                 className={cx(
                   'rounded-xl border p-4 transition-all',
-                  locked ? 'border-white/[0.06] bg-black/25 opacity-70' : 'border-white/[0.1] bg-white/[0.03]'
+                  locked ? 'border-white/[0.06] bg-black/20 opacity-70' : 'border-white/[0.1] bg-white/[0.04]'
                 )}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -201,7 +201,18 @@ export function LiveLimitsModal({
                   <div className="mt-3 space-y-2 rounded-lg border border-white/[0.06] bg-black/30 p-2.5">
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-[12px]">
-                        <span className="font-medium text-zinc-200">5-Hour Session Window: {pct}%</span>
+                        <span className="flex items-center gap-1.5 font-medium text-zinc-200">
+                          5-Hour Session Window: {pct}%
+                          <span
+                            className={cx(
+                              'rounded-full px-1.5 py-0.2 text-[9.5px] font-semibold tracking-wide uppercase',
+                              sub.limit.source === 'live' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/[0.07] text-zinc-400'
+                            )}
+                            title={sub.limit.source === 'live' ? 'Read from the provider' : 'Estimated from token usage against your plan tier'}
+                          >
+                            {sub.limit.source === 'live' ? 'live' : 'estimated'}
+                          </span>
+                        </span>
                         <span className="text-zinc-400">{sub.limit.resetInLabel}</span>
                       </div>
                       <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.08]">
@@ -226,12 +237,46 @@ export function LiveLimitsModal({
                       </div>
                     )}
 
+                    {!!sub.limit.modelBuckets?.length && (
+                      <div className="space-y-1.5 border-t border-white/[0.06] pt-2">
+                        <div className="eyebrow">Per-model limits</div>
+                        {sub.limit.modelBuckets.map((b) => (
+                          <div key={b.key} className="space-y-0.5">
+                            <div className="flex items-center justify-between text-[11.5px]">
+                              <span className="text-zinc-300">
+                                {b.label}
+                                <span className="ml-1.5 text-zinc-500">
+                                  {b.resetInLabel}
+                                  {b.source === 'estimated' ? ` · ${fmtTokens(b.usedTokens)} tok · est.` : ''}
+                                </span>
+                              </span>
+                              <span
+                                className={cx('font-mono', b.status === 'rejected' ? 'text-red-300' : b.status === 'warning' ? 'text-amber-300' : 'text-zinc-300')}
+                                title={b.resetInLabel}
+                              >
+                                {100 - b.utilizationPct}% left
+                              </span>
+                            </div>
+                            <div className="meter h-1">
+                              <span
+                                className={b.status === 'rejected' ? 'bg-red-500' : b.status === 'warning' ? 'bg-amber-500' : 'bg-sky-500'}
+                                style={{ width: `${Math.max(2, b.utilizationPct)}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-zinc-400">
                       <span>
-                        5h activity: {fmtTokens(sub.limit.usedTokens)} tokens · {sub.limit.usedRequests} turns
+                        5h: {fmtTokens(sub.limit.usedTokens)} tokens · {sub.limit.usedRequests} turns
                       </span>
-                      <span>24h: {fmtTokens(sub.limit.todayTokens)} tokens</span>
+                      <span>
+                        24h: {fmtTokens(sub.limit.todayTokens)} · 7d: {fmtTokens(sub.limit.weekTokens)}
+                      </span>
                     </div>
+                    {sub.limit.liveNote && <p className="text-[10.5px] text-zinc-500">{sub.limit.liveNote}</p>}
                   </div>
                 ) : (
                   <div className="mt-3 rounded-lg border border-dashed border-white/[0.08] bg-black/20 p-2.5 font-mono text-[11px] text-zinc-400">
@@ -255,7 +300,7 @@ export function LiveLimitsModal({
                   value={settings.claudeTier}
                   onChange={(e) => updateSetting({ claudeTier: e.target.value as Settings['claudeTier'] })}
                 >
-                  <option value="pro">Claude Pro (1x 5h window)</option>
+                  <option value="pro">Claude Pro (auto-detected when signed in)</option>
                   <option value="max5x">Claude Max (5x 5h window)</option>
                   <option value="max20x">Claude Max (20x 5h window)</option>
                 </select>
@@ -289,7 +334,7 @@ export function LiveLimitsModal({
                 onChange={(e) => updateSetting({ cliHandover: e.target.checked })}
                 className="accent-indigo-500"
               />
-              Automatically hand over to the next authenticated subscription when one reaches its 5h rate limit
+              Automatically hand over to the next signed-in subscription when one reaches its limit
             </label>
           </div>
         )}

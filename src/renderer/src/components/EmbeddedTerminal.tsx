@@ -55,9 +55,9 @@ export function EmbeddedTerminal({
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-white/[0.1] bg-[#0d0e13]">
+    <div className="flex h-full flex-col overflow-hidden card rounded-xl bg-black/40">
       {/* Terminal Top Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] bg-[#14151c] px-3.5 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] bg-white/[0.03] px-3.5 py-2">
         <div className="flex items-center gap-2">
           <TerminalIcon size={14} className="text-emerald-400" />
           <span className="text-[12.5px] font-semibold text-zinc-200">Embedded CLI Terminal</span>
@@ -151,7 +151,7 @@ export function EmbeddedTerminal({
       </div>
 
       {/* Command Input Bar */}
-      <div className="flex items-center gap-2 border-t border-white/[0.08] bg-[#121319] px-3.5 py-2">
+      <div className="flex items-center gap-2 border-t border-white/[0.08] bg-white/[0.02] px-3.5 py-2">
         <span className="font-mono text-[12.5px] font-bold text-emerald-400">PS &gt;</span>
         <input
           value={input}

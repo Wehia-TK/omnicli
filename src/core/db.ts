@@ -116,6 +116,15 @@ const MIGRATIONS: string[] = [
   UPDATE projects SET default_model = 'gemini-4-argon', default_effort = 'high' WHERE default_model = 'gemini-4-argon-high';
   UPDATE projects SET default_model = 'gemini-4-argon', default_effort = 'medium' WHERE default_model = 'gemini-4-argon-medium';
   UPDATE projects SET default_model = 'gemini-4-argon', default_effort = 'low' WHERE default_model = 'gemini-4-argon-low';
+  `,
+  `
+  ALTER TABLE projects ADD COLUMN git_remote_url TEXT NOT NULL DEFAULT '';
+  ALTER TABLE project_tasks ADD COLUMN codex_thread TEXT;
+  -- Claude is now the default AI everywhere
+  UPDATE projects SET default_cli = 'claude', default_model = 'claude-opus-5-5', default_effort = 'medium' WHERE default_cli IN ('', 'agy');
+  DELETE FROM settings WHERE key IN ('defaultCli', 'defaultModel') AND value IN ('"agy"', '"gemini-4-argon-high"', '"gemini-4-argon"');
+  -- Stale rate-limit locks without a reset time used to stick at 100% forever
+  DELETE FROM cli_rate_events WHERE resets_at IS NULL;
   `
 ]
 
@@ -161,8 +170,8 @@ function seedInitialProjects(): void {
         aiWrapperFolder,
         'Centralized desktop app for AI CLI subscriptions (Claude Code, Antigravity, Codex, Gemini, Copilot) with live usage limits and shared Project Knowledge Base.',
         'npm run typecheck && npm run build',
-        'agy',
-        'gemini-4-argon',
+        'claude',
+        'claude-opus-5-5',
         'default',
         'local',
         1,

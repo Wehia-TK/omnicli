@@ -4,6 +4,7 @@ import type {
   CliId,
   CliSubscriptionStatus,
   EffortLevel,
+  GitStatusInfo,
   KnowledgeCategory,
   KnowledgeEntry,
   LogLine,
@@ -13,6 +14,7 @@ import type {
   ProjectTask,
   ProjectTaskStatus,
   Settings,
+  SkillInfo,
   TaskChanges,
   TerminalOutputEvent
 } from '@shared/types'
@@ -59,10 +61,22 @@ export const api = {
     delete: (id: number) => call<true>('knowledge.delete', id),
     scanRepo: (projectId: number) => call<KnowledgeEntry[]>('knowledge.scanRepo', projectId)
   },
+  skills: {
+    list: (projectId?: number) => call<SkillInfo[]>('skills.list', projectId)
+  },
+  git: {
+    status: (projectId: number) => call<GitStatusInfo>('git.status', projectId),
+    init: (projectId: number) => call<GitStatusInfo>('git.init', projectId),
+    setRemote: (projectId: number, url: string) => call<GitStatusInfo>('git.setRemote', projectId, url),
+    push: (projectId: number, url?: string, message?: string) =>
+      call<GitStatusInfo & { pushed: string }>('git.push', projectId, url, message)
+  },
   projects: {
     list: () => call<Project[]>('projects.list'),
     save: (p: Partial<Project> & { name: string }) => call<Project>('projects.save', p),
     archive: (id: number, archived?: boolean) => call<Project>('projects.archive', id, archived),
+    setDefaults: (id: number, d: { cli?: CliId; model?: string; effort?: EffortLevel }) =>
+      call<Project>('projects.setDefaults', id, d),
     delete: (id: number) => call<true>('projects.delete', id),
     files: (projectId: number) => call<string[]>('projects.files', projectId),
     tasks: (projectId: number) => call<ProjectTask[]>('projects.tasks', projectId),

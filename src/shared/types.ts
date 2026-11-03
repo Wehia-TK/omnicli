@@ -23,6 +23,21 @@ export interface CliModel {
   effortModelMap?: Partial<Record<EffortLevel, string>>
 }
 
+/** Per-model (or per-model-family) quota bucket — Antigravity and Claude meter some models separately. */
+export interface ModelLimitBucket {
+  key: string
+  label: string
+  /** Base model ids that draw from this bucket */
+  modelIds: string[]
+  utilizationPct: number
+  usedTokens: number
+  usedRequests: number
+  status: 'ok' | 'warning' | 'rejected'
+  resetInLabel: string
+  window: '5h' | '7d'
+  source: 'live' | 'estimated'
+}
+
 export interface CliLimitInfo {
   windowHours: number
   usedTokens: number
@@ -40,6 +55,31 @@ export interface CliLimitInfo {
   todayRequests: number
   weekTokens: number
   liveNote?: string
+  /** 'live' = read from the provider (OAuth usage API / CLI session files); 'estimated' = budget heuristics */
+  source?: 'live' | 'estimated'
+  modelBuckets?: ModelLimitBucket[]
+}
+
+export interface SkillInfo {
+  name: string
+  description: string
+  /** Absolute path to SKILL.md */
+  path: string
+  /** Which CLI natively loads this skill (can be invoked as /name) */
+  native: ('claude' | 'agy' | 'codex' | 'gemini' | 'copilot')[]
+  scope: 'user' | 'project'
+}
+
+export interface GitStatusInfo {
+  isRepo: boolean
+  branch: string
+  hasCommits: boolean
+  dirtyFiles: number
+  remoteUrl: string
+  savedRemoteUrl: string
+  ahead: number
+  behind: number
+  upstream: string
 }
 
 export interface CliSubscriptionStatus {
@@ -72,6 +112,7 @@ export interface Project {
   default_effort?: EffortLevel
   default_mode: PermissionMode
   default_checkout: CheckoutMode
+  git_remote_url?: string
   sort: number
   archived_at: string | null
   created_at: string
@@ -82,7 +123,7 @@ export interface Project {
 }
 
 export interface MentionItem {
-  type: 'project' | 'file' | 'kb'
+  type: 'project' | 'file' | 'kb' | 'skill'
   label: string
   value: string
 }
@@ -101,6 +142,7 @@ export interface ProjectTask {
   run_state: RunState
   session_id: string | null
   agy_conversation: string | null
+  codex_thread?: string | null
   branch: string | null
   worktree: string | null
   base_commit: string | null
@@ -155,6 +197,11 @@ export interface Settings {
   theme: 'dark' | 'light' | 'system'
   defaultCli: CliId
   defaultModel: string
+  defaultEffort: EffortLevel
+  /** 'compact' sends a short KB index + file pointers; 'full' inlines pinned entries (more tokens) */
+  kbPromptMode: 'compact' | 'full'
+  /** Build/refresh a graphify code graph during KB scans (no LLM tokens used) */
+  useGraphify: boolean
   defaultPermissionMode: PermissionMode
   defaultCheckoutMode: CheckoutMode
   cliHandover: boolean

@@ -47,7 +47,7 @@ export function KnowledgeBaseView({ project, entries }: KnowledgeBaseViewProps):
             </span>
           </div>
           <p className="muted max-w-2xl text-[12.5px]">
-            Pinned entries are automatically synced to disk and injected into every session across{' '}
+            Pinned entries are synced to disk and shared (compactly, to save tokens) with every session across{' '}
             <strong className="text-zinc-200">Claude Code, Antigravity, Codex, Gemini, and Copilot</strong>. When one AI
             completes a task or hits a rate limit, its handoff summary is recorded here so the next AI picks up seamlessly.
           </p>
@@ -69,7 +69,7 @@ export function KnowledgeBaseView({ project, entries }: KnowledgeBaseViewProps):
             disabled={scanning || !project.folder}
             onClick={handleScan}
             className="btn h-8 text-[12px]"
-            title="Automatically inspect package.json, README, and src/ to populate Architecture & Conventions"
+            title="Detect the stack, map the source tree and build a graphify code graph (no AI tokens) — never overwrites entries you wrote"
           >
             <Sparkles size={13} className="text-amber-400" /> {scanning ? 'Scanning…' : 'Scan Codebase'}
           </button>
@@ -98,10 +98,7 @@ export function KnowledgeBaseView({ project, entries }: KnowledgeBaseViewProps):
           type="button"
           onClick={() => setFilter('all')}
           className={cx(
-            'cursor-pointer rounded-full border px-3 py-1 text-[12px] font-medium transition-colors',
-            filter === 'all'
-              ? 'border-indigo-400/40 bg-indigo-500/20 text-white'
-              : 'border-white/[0.08] bg-white/[0.03] text-zinc-400 hover:text-zinc-200'
+            'chip', filter === 'all' && 'chip-active'
           )}
         >
           All ({entries.length})

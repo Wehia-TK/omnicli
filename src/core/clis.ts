@@ -2,7 +2,7 @@ import { execFile, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CliId, CliLimitInfo, CliModel, CliSubscriptionStatus, EffortLevel } from '@shared/types'
+import type { CliId, CliLimitInfo, CliModel, CliSubscriptionStatus, EffortLevel, ModelLimitBucket } from '@shared/types'
 import { all, get, nowLocal, run, runSilent } from './db'
 import { getSettings } from './settings'
 
@@ -260,8 +260,20 @@ function bundledClaudeCli(): string {
   return hits.sort((a, b) => b.at - a.at)[0]?.path ?? ''
 }
 
+const exeCache = new Map<string, { path: string; at: number }>()
+
+/** Cached for 60s — `where.exe` is a blocking spawn and this is called from hot paths. */
 export function findCliExecutable(cli: CliId): string {
   const s = getSettings()
+  const key = `${cli}|${s[`${cli}Path` as 'claudePath'] ?? ''}`
+  const hit = exeCache.get(key)
+  if (hit && Date.now() - hit.at < 60_000) return hit.path
+  const path = locateCliExecutable(cli, s)
+  exeCache.set(key, { path, at: Date.now() })
+  return path
+}
+
+function locateCliExecutable(cli: CliId, s: ReturnType<typeof getSettings>): string {
   const home = homedir()
   const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local')
   const appData = process.env.APPDATA || join(home, 'AppData', 'Roaming')
@@ -347,12 +359,14 @@ function detectAuth(cli: CliId, exePath: string): {
       }
     }
     let subType = ''
+    let rateTier = ''
     if (existsSync(credsJson)) {
       try {
         const creds = JSON.parse(readFileSync(credsJson, 'utf8')) as {
-          claudeAiOauth?: { subscriptionType?: string; accessToken?: string }
+          claudeAiOauth?: { subscriptionType?: string; accessToken?: string; rateLimitTier?: string }
         }
         subType = creds.claudeAiOauth?.subscriptionType || ''
+        rateTier = creds.claudeAiOauth?.rateLimitTier || ''
       } catch {
         // ignore
       }
@@ -360,7 +374,11 @@ function detectAuth(cli: CliId, exePath: string): {
     const hasAuthFiles = Boolean(email) || existsSync(credsJson)
     const installed = Boolean(exePath)
     const planName =
-      subType === 'max' || orgType.includes('max')
+      /20x/i.test(rateTier)
+        ? 'Claude Max 20x'
+        : /5x/i.test(rateTier)
+          ? 'Claude Max 5x'
+          : subType === 'max' || orgType.includes('max')
         ? 'Claude Max'
         : subType === 'pro' || orgType.includes('pro')
           ? 'Claude Pro'
@@ -536,8 +554,10 @@ function detectAuth(cli: CliId, exePath: string): {
 function windowBudgetFor(cli: CliId, detectedPlan?: string): { maxTokens: number; maxRequests: number; planLabel: string } {
   const s = getSettings()
   if (cli === 'claude') {
-    if (s.claudeTier === 'max20x') return { maxTokens: 4_500_000, maxRequests: 900, planLabel: 'Claude Max 20x' }
-    if (s.claudeTier === 'max5x') return { maxTokens: 1_200_000, maxRequests: 225, planLabel: 'Claude Max 5x' }
+    // Prefer the tier detected from ~/.claude/.credentials.json (rateLimitTier) over the manual setting
+    const tier = detectedPlan?.includes('20x') ? 'max20x' : detectedPlan?.includes('5x') ? 'max5x' : s.claudeTier
+    if (tier === 'max20x') return { maxTokens: 4_500_000, maxRequests: 900, planLabel: 'Claude Max 20x' }
+    if (tier === 'max5x') return { maxTokens: 1_200_000, maxRequests: 225, planLabel: 'Claude Max 5x' }
     return { maxTokens: 500_000, maxRequests: 60, planLabel: detectedPlan || 'Claude Pro' }
   }
   if (cli === 'agy') {
@@ -549,7 +569,7 @@ function windowBudgetFor(cli: CliId, detectedPlan?: string): { maxTokens: number
     return { maxTokens: 500_000, maxRequests: 80, planLabel: 'ChatGPT Plus' }
   }
   if (cli === 'gemini') {
-    return { maxTokens: 1_500_000, maxRequests: 150, planLabel: 'Google AI Pro' }
+    return { maxTokens: 1_500_000, maxRequests: 150, planLabel: s.geminiTier === 'advanced' ? 'Google AI Pro' : 'Gemini Free' }
   }
   return {
     maxTokens: 600_000,
@@ -570,321 +590,640 @@ function formatDurationShort(ms: number): string {
   return `${m}m`
 }
 
+const resetLabel = (iso: string | null | undefined, nowMs: number, fallback = '5h window ready'): string => {
+  if (!iso) return fallback
+  const ms = Date.parse(iso) - nowMs
+  return Number.isNaN(ms) || ms <= 0 ? fallback : `Resets in ${formatDurationShort(ms)}`
+}
+
+const statusFor = (pct: number): 'ok' | 'warning' | 'rejected' => (pct >= 100 ? 'rejected' : pct >= 80 ? 'warning' : 'ok')
+
+// ───────────────────────────── Claude: live OAuth usage ─────────────────────────────
+
+interface LiveWindow {
+  pct: number
+  resetsAt: string | null
+}
+
 interface LiveClaudeOAuthUsage {
   fetchedAt: number
-  fiveHourPct: number
-  fiveHourResetsAt: string | null
-  sevenDayPct: number
-  sevenDayResetsAt: string | null
+  fiveHour: LiveWindow
+  sevenDay: LiveWindow
+  perModel: { key: string; label: string; match: RegExp; window: LiveWindow }[]
 }
 
 let cachedClaudeOAuthUsage: LiveClaudeOAuthUsage | null = null
+let claudeUsageInFlight: Promise<LiveClaudeOAuthUsage | null> | null = null
 
-/** Fetch real live 5-hour session & 7-day weekly usage directly from Anthropic's OAuth Usage API (or fallback to ~/.claude.json). */
+/** Real live 5-hour session, 7-day weekly and per-model weekly usage from Anthropic's OAuth usage endpoint (falls back to ~/.claude.json). */
 async function fetchLiveClaudeOAuthUsage(force = false): Promise<LiveClaudeOAuthUsage | null> {
   const now = Date.now()
-  if (!force && cachedClaudeOAuthUsage && now - cachedClaudeOAuthUsage.fetchedAt < 30_000) {
-    return cachedClaudeOAuthUsage
-  }
-
-  const home = homedir()
-  const credsPath = join(home, '.claude', '.credentials.json')
-  if (existsSync(credsPath)) {
-    try {
-      const creds = JSON.parse(readFileSync(credsPath, 'utf8')) as {
-        claudeAiOauth?: { accessToken?: string }
-      }
-      const token = creds.claudeAiOauth?.accessToken
-      if (token) {
-        const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'anthropic-beta': 'oauth-2025-04-20',
-            Accept: 'application/json'
-          },
-          signal: AbortSignal.timeout(4500)
-        })
-        if (res.ok) {
-          const data = (await res.json()) as {
-            five_hour?: { utilization?: number; resets_at?: string | null }
-            seven_day?: { utilization?: number; resets_at?: string | null }
-          }
-          cachedClaudeOAuthUsage = {
-            fetchedAt: now,
-            fiveHourPct: Math.round(data.five_hour?.utilization ?? 0),
-            fiveHourResetsAt: data.five_hour?.resets_at ?? null,
-            sevenDayPct: Math.round(data.seven_day?.utilization ?? 0),
-            sevenDayResetsAt: data.seven_day?.resets_at ?? null
-          }
-          return cachedClaudeOAuthUsage
-        }
-      }
-    } catch {
-      // fall through to cachedUsageUtilization in ~/.claude.json
+  if (!force && cachedClaudeOAuthUsage && now - cachedClaudeOAuthUsage.fetchedAt < 45_000) return cachedClaudeOAuthUsage
+  if (claudeUsageInFlight) return claudeUsageInFlight
+  claudeUsageInFlight = (async () => {
+    type W = { utilization?: number | null; resets_at?: string | null } | null | undefined
+    const win = (w: W): LiveWindow => {
+      const resetsAt = w?.resets_at ?? null
+      const expired = resetsAt ? Date.parse(resetsAt) <= now : false
+      return { pct: expired ? 0 : Math.round(w?.utilization ?? 0), resetsAt: expired ? null : resetsAt }
     }
-  }
+    const build = (d: Record<string, W>): LiveClaudeOAuthUsage => ({
+      fetchedAt: now,
+      fiveHour: win(d.five_hour),
+      sevenDay: win(d.seven_day),
+      perModel: [
+        { key: 'seven_day_opus', label: 'Opus · weekly', match: /opus/i },
+        { key: 'seven_day_sonnet', label: 'Sonnet · weekly', match: /sonnet/i }
+      ]
+        .filter((m) => d[m.key] && d[m.key]?.utilization != null)
+        .map((m) => ({ ...m, window: win(d[m.key]) }))
+    })
 
-  // Fallback to ~/.claude.json cachedUsageUtilization if offline
-  const claudeJson = join(home, '.claude.json')
-  if (existsSync(claudeJson)) {
-    try {
-      const cj = JSON.parse(readFileSync(claudeJson, 'utf8')) as {
-        cachedUsageUtilization?: {
-          utilization?: {
-            five_hour?: { utilization?: number; resets_at?: string | null }
-            seven_day?: { utilization?: number; resets_at?: string | null }
-          }
+    const home = homedir()
+    const credsPath = join(home, '.claude', '.credentials.json')
+    if (existsSync(credsPath)) {
+      try {
+        const creds = JSON.parse(readFileSync(credsPath, 'utf8')) as { claudeAiOauth?: { accessToken?: string; expiresAt?: number } }
+        const token = creds.claudeAiOauth?.accessToken
+        const notExpired = !creds.claudeAiOauth?.expiresAt || creds.claudeAiOauth.expiresAt > now
+        if (token && notExpired) {
+          const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+            headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', Accept: 'application/json' },
+            signal: AbortSignal.timeout(4500)
+          })
+          if (res.ok) return (cachedClaudeOAuthUsage = build((await res.json()) as Record<string, W>))
         }
+      } catch {
+        // offline — fall through to the CLI's own cache
       }
-      const u = cj.cachedUsageUtilization?.utilization
-      if (u) {
-        const fiveReset = u.five_hour?.resets_at ? Date.parse(u.five_hour.resets_at) : 0
-        const sevenReset = u.seven_day?.resets_at ? Date.parse(u.seven_day.resets_at) : 0
-        cachedClaudeOAuthUsage = {
-          fetchedAt: now,
-          fiveHourPct: fiveReset > now ? Math.round(u.five_hour?.utilization ?? 0) : 0,
-          fiveHourResetsAt: fiveReset > now ? (u.five_hour?.resets_at ?? null) : null,
-          sevenDayPct: sevenReset > now ? Math.round(u.seven_day?.utilization ?? 0) : 0,
-          sevenDayResetsAt: sevenReset > now ? (u.seven_day?.resets_at ?? null) : null
-        }
-        return cachedClaudeOAuthUsage
-      }
-    } catch {
-      // ignore
     }
-  }
-  return null
+    const claudeJson = join(home, '.claude.json')
+    if (existsSync(claudeJson)) {
+      try {
+        const cj = JSON.parse(readFileSync(claudeJson, 'utf8')) as { cachedUsageUtilization?: { utilization?: Record<string, W> } }
+        const u = cj.cachedUsageUtilization?.utilization
+        if (u) return (cachedClaudeOAuthUsage = build(u))
+      } catch {
+        // ignore
+      }
+    }
+    return null
+  })().finally(() => {
+    claudeUsageInFlight = null
+  })
+  return claudeUsageInFlight
 }
 
-let cachedAgyBrainActivity: {
+// ───────────────────── Real token counts from the CLIs' own transcripts ─────────────────────
+
+interface TranscriptTotals {
   at: number
-  windowTurns: number
-  windowTokens: number
-  todayTokens: number
-  oldestInWindowMs: number | null
-} | null = null
+  window: { tokens: number; turns: number; oldest: number | null }
+  today: { tokens: number; turns: number }
+  week: { tokens: number }
+  /** tokens / turns in the 5h window per base model id */
+  byModel: Map<string, { tokens: number; turns: number; oldest: number | null }>
+}
 
-/** Scan ~/.gemini/antigravity/brain and ~/.gemini/antigravity-cli/brain for real 5-hour rolling activity. */
-function scanAgyActivity(windowStartMs: number, todayStartMs: number): {
-  windowTurns: number
-  windowTokens: number
-  todayTokens: number
-  oldestInWindowMs: number | null
-} {
-  const now = Date.now()
-  if (cachedAgyBrainActivity && now - cachedAgyBrainActivity.at < 15_000) {
-    return cachedAgyBrainActivity
+const emptyTotals = (): TranscriptTotals => ({
+  at: Date.now(),
+  window: { tokens: 0, turns: 0, oldest: null },
+  today: { tokens: 0, turns: 0 },
+  week: { tokens: 0 },
+  byModel: new Map()
+})
+
+function addTurn(t: TranscriptTotals, ts: number, tokens: number, model: string, starts: { window: number; today: number; week: number }): void {
+  if (ts < starts.week) return
+  t.week.tokens += tokens
+  if (ts >= starts.today) {
+    t.today.tokens += tokens
+    t.today.turns += 1
   }
-  let windowTurns = 0
-  let windowTokens = 0
-  let todayTokens = 0
-  let oldestInWindowMs: number | null = null
+  if (ts >= starts.window) {
+    t.window.tokens += tokens
+    t.window.turns += 1
+    if (t.window.oldest === null || ts < t.window.oldest) t.window.oldest = ts
+    const key = model || 'unknown'
+    const m = t.byModel.get(key) ?? { tokens: 0, turns: 0, oldest: null }
+    m.tokens += tokens
+    m.turns += 1
+    if (m.oldest === null || ts < m.oldest) m.oldest = ts
+    t.byModel.set(key, m)
+  }
+}
 
-  const home = homedir()
-  const roots = [
-    join(home, '.gemini', 'antigravity', 'brain'),
-    join(home, '.gemini', 'antigravity-cli', 'brain')
-  ]
-
-  for (const root of roots) {
-    if (!existsSync(root)) continue
+function listRecentFiles(root: string, test: (name: string) => boolean, sinceMs: number, maxDepth: number): string[] {
+  const out: string[] = []
+  const walk = (dir: string, depth: number): void => {
+    let entries
     try {
-      const convos = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory())
-      for (const c of convos) {
-        const transcript = join(root, c.name, '.system_generated', 'logs', 'transcript.jsonl')
-        if (!existsSync(transcript)) continue
-        const st = statSync(transcript)
-        if (st.mtimeMs < todayStartMs) continue
-        const raw = readFileSync(transcript, 'utf8')
-        for (const line of raw.split('\n')) {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      const full = join(dir, e.name)
+      if (e.isDirectory()) {
+        if (depth < maxDepth) walk(full, depth + 1)
+      } else if (test(e.name)) {
+        try {
+          if (statSync(full).mtimeMs >= sinceMs) out.push(full)
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+  if (existsSync(root)) walk(root, 0)
+  return out
+}
+
+let cachedClaudeTranscripts: TranscriptTotals | null = null
+
+/** Sum real token usage from Claude Code transcripts (~/.claude/projects/**.jsonl) — includes usage from Claude Desktop & terminal, not just AI Hub. */
+function scanClaudeTranscripts(starts: { window: number; today: number; week: number }): TranscriptTotals {
+  if (cachedClaudeTranscripts && Date.now() - cachedClaudeTranscripts.at < 30_000) return cachedClaudeTranscripts
+  const totals = emptyTotals()
+  const seen = new Set<string>()
+  for (const file of listRecentFiles(join(homedir(), '.claude', 'projects'), (n) => n.endsWith('.jsonl'), starts.week, 3)) {
+    let raw = ''
+    try {
+      raw = readFileSync(file, 'utf8')
+    } catch {
+      continue
+    }
+    for (const line of raw.split('\n')) {
+      if (!line.includes('"usage"') || !line.includes('"assistant"')) continue
+      try {
+        const o = JSON.parse(line) as {
+          type?: string
+          timestamp?: string
+          message?: { id?: string; model?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number } }
+        }
+        const id = o.message?.id
+        if (o.type !== 'assistant' || !id || seen.has(id) || !o.message?.usage) continue
+        seen.add(id)
+        const u = o.message.usage
+        const tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+        const ts = o.timestamp ? Date.parse(o.timestamp) : 0
+        if (ts) addTurn(totals, ts, tokens, (o.message.model ?? '').replace(/\[.*\]$/, ''), starts)
+      } catch {
+        // ignore partial lines
+      }
+    }
+  }
+  return (cachedClaudeTranscripts = totals)
+}
+
+let cachedAgyTranscripts: TranscriptTotals | null = null
+
+/** Real Antigravity token usage from ~/.gemini/antigravity*\/brain/*\/transcript.jsonl (input+output tokens per model turn). */
+function scanAgyTranscripts(starts: { window: number; today: number; week: number }): TranscriptTotals {
+  if (cachedAgyTranscripts && Date.now() - cachedAgyTranscripts.at < 20_000) return cachedAgyTranscripts
+  const totals = emptyTotals()
+  // Conversations started from AI Hub know their model; others are attributed to "unknown"
+  const convModel = new Map<string, string>()
+  try {
+    for (const r of all<{ agy_conversation: string; model: string }>(
+      "SELECT agy_conversation, model FROM project_tasks WHERE agy_conversation IS NOT NULL AND agy_conversation != ''"
+    )) {
+      convModel.set(r.agy_conversation, r.model)
+    }
+  } catch {
+    // ignore
+  }
+  const home = homedir()
+  for (const root of [join(home, '.gemini', 'antigravity', 'brain'), join(home, '.gemini', 'antigravity-cli', 'brain')]) {
+    let convos: string[] = []
+    try {
+      convos = readdirSync(root, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+    } catch {
+      continue
+    }
+    for (const c of convos) {
+      const transcript = join(root, c, '.system_generated', 'logs', 'transcript.jsonl')
+      try {
+        if (!existsSync(transcript) || statSync(transcript).mtimeMs < starts.week) continue
+        const model = (convModel.get(c) ?? '').replace(/-(low|medium|high)$/i, '')
+        for (const line of readFileSync(transcript, 'utf8').split('\n')) {
           if (!line.includes('PLANNER_RESPONSE')) continue
           try {
-            const obj = JSON.parse(line) as { created_at?: string; type?: string }
-            if (obj.type !== 'PLANNER_RESPONSE') continue
-            const ts = obj.created_at ? Date.parse(obj.created_at) : st.mtimeMs
-            const estTokens = Math.max(600, Math.round(line.length / 3.5))
-            if (ts >= todayStartMs) todayTokens += estTokens
-            if (ts >= windowStartMs) {
-              windowTurns += 1
-              windowTokens += estTokens
-              if (oldestInWindowMs === null || ts < oldestInWindowMs) oldestInWindowMs = ts
-            }
+            const o = JSON.parse(line) as { type?: string; created_at?: string; input_tokens?: number; output_tokens?: number }
+            if (o.type !== 'PLANNER_RESPONSE') continue
+            const tokens = (o.input_tokens ?? 0) + (o.output_tokens ?? 0) || Math.round(line.length / 3.5)
+            const ts = o.created_at ? Date.parse(o.created_at) : 0
+            if (ts) addTurn(totals, ts, tokens, model, starts)
           } catch {
             // ignore
           }
         }
+      } catch {
+        // ignore unreadable conversation
+      }
+    }
+  }
+  return (cachedAgyTranscripts = totals)
+}
+
+/** Exact token usage for one Antigravity conversation since a given time (used to bill a run accurately). */
+export function agyConversationTokens(conversationId: string, sinceMs: number): number {
+  const home = homedir()
+  for (const root of [join(home, '.gemini', 'antigravity-cli', 'brain'), join(home, '.gemini', 'antigravity', 'brain')]) {
+    const transcript = join(root, conversationId, '.system_generated', 'logs', 'transcript.jsonl')
+    if (!existsSync(transcript)) continue
+    let sum = 0
+    try {
+      for (const line of readFileSync(transcript, 'utf8').split('\n')) {
+        if (!line.includes('PLANNER_RESPONSE')) continue
+        try {
+          const o = JSON.parse(line) as { created_at?: string; input_tokens?: number; output_tokens?: number }
+          // created_at has second precision — allow a little slack
+          if (o.created_at && Date.parse(o.created_at) >= sinceMs - 2000) sum += (o.input_tokens ?? 0) + (o.output_tokens ?? 0)
+        } catch {
+          // ignore
+        }
       }
     } catch {
       // ignore
     }
+    return sum
   }
+  return 0
+}
 
-  cachedAgyBrainActivity = { at: now, windowTurns, windowTokens, todayTokens, oldestInWindowMs }
-  return cachedAgyBrainActivity
+// ───────────────────────────── Codex: live rate limits ─────────────────────────────
+
+interface CodexLive {
+  at: number
+  primary: LiveWindow & { windowMinutes: number }
+  secondary: (LiveWindow & { windowMinutes: number }) | null
+}
+let cachedCodexLive: { at: number; value: CodexLive | null } | null = null
+
+/** Codex writes the server's rate-limit snapshot into ~/.codex/sessions/**\/rollout-*.jsonl on every turn. */
+function readCodexLiveLimits(nowMs: number): CodexLive | null {
+  if (cachedCodexLive && nowMs - cachedCodexLive.at < 20_000) return cachedCodexLive.value
+  let value: CodexLive | null = null
+  const files = listRecentFiles(join(homedir(), '.codex', 'sessions'), (n) => n.startsWith('rollout-') && n.endsWith('.jsonl'), nowMs - 7 * 86_400_000, 4)
+    .map((f) => ({ f, m: statSync(f).mtimeMs }))
+    .sort((a, b) => b.m - a.m)
+  type Win = { used_percent?: number; window_minutes?: number; resets_at?: number | string; resets_in_seconds?: number }
+  const conv = (w: Win | undefined, fileMtime: number): (LiveWindow & { windowMinutes: number }) | null => {
+    if (!w || typeof w.used_percent !== 'number') return null
+    let resetsMs = 0
+    if (typeof w.resets_at === 'number') resetsMs = w.resets_at * (w.resets_at < 1e12 ? 1000 : 1)
+    else if (typeof w.resets_at === 'string') resetsMs = Date.parse(w.resets_at)
+    else if (typeof w.resets_in_seconds === 'number') resetsMs = fileMtime + w.resets_in_seconds * 1000
+    const expired = resetsMs > 0 && resetsMs <= nowMs
+    return {
+      pct: expired ? 0 : Math.round(w.used_percent),
+      resetsAt: resetsMs && !expired ? new Date(resetsMs).toISOString() : null,
+      windowMinutes: w.window_minutes ?? 300
+    }
+  }
+  for (const { f, m } of files.slice(0, 6)) {
+    try {
+      const lines = readFileSync(f, 'utf8').split('\n')
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].includes('rate_limits')) continue
+        const o = JSON.parse(lines[i]) as { payload?: { rate_limits?: { primary?: Win; secondary?: Win } }; rate_limits?: { primary?: Win; secondary?: Win } }
+        const rl = o.payload?.rate_limits ?? o.rate_limits
+        const primary = conv(rl?.primary, m)
+        if (primary) {
+          value = { at: nowMs, primary, secondary: conv(rl?.secondary, m) }
+          break
+        }
+      }
+    } catch {
+      // ignore
+    }
+    if (value) break
+  }
+  cachedCodexLive = { at: nowMs, value }
+  return value
+}
+
+// ───────────────────────────── Antigravity: live quota via `agy -p /usage` ─────────────────────────────
+
+interface AgyQuotaGroup {
+  name: string
+  description?: string
+  buckets: { id: string; name: string; window: string; remaining_fraction: number; reset_time?: string }[]
+}
+let cachedAgyQuota: { at: number; groups: AgyQuotaGroup[] | null } | null = null
+let agyQuotaInFlight: Promise<AgyQuotaGroup[] | null> | null = null
+
+/**
+ * Antigravity's own `/usage` command returns the exact quota groups shown in the Antigravity app
+ * (Gemini models / Claude & GPT models / Gemini 4 Argon, each with 5h + weekly windows). It runs locally,
+ * costs 0 tokens, and the CLI uses its own sign-in — AI Hub never touches the token.
+ */
+async function fetchAgyLiveQuota(force = false): Promise<AgyQuotaGroup[] | null> {
+  const now = Date.now()
+  if (!force && cachedAgyQuota && now - cachedAgyQuota.at < 60_000) return cachedAgyQuota.groups
+  if (agyQuotaInFlight) return agyQuotaInFlight
+  const exe = findCliExecutable('agy')
+  if (!exe || /\.(cmd|bat)$/i.test(exe)) return null
+  agyQuotaInFlight = new Promise<AgyQuotaGroup[] | null>((resolve) => {
+    execFile(exe, ['-p', '/usage', '--output-format', 'json'], { windowsHide: true, timeout: 25_000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
+      let groups: AgyQuotaGroup[] | null = null
+      if (!err && out) {
+        try {
+          const j = JSON.parse(out.slice(out.indexOf('{'))) as { command?: { name?: string; data?: { groups?: AgyQuotaGroup[] } } }
+          if (j.command?.name === 'usage' && Array.isArray(j.command.data?.groups)) groups = j.command.data!.groups!
+        } catch {
+          // not the structured usage payload
+        }
+      }
+      cachedAgyQuota = { at: Date.now(), groups }
+      resolve(groups)
+    }).stdin?.end()
+  }).finally(() => {
+    agyQuotaInFlight = null
+  })
+  return agyQuotaInFlight
+}
+
+/** Which catalog models draw from a quota group: exact model-name groups ("Gemini 4 Argon") or vendor lists ("Models within this group: Gemini Flash, Claude Opus…"). */
+function agyGroupModels(group: AgyQuotaGroup, catalog: CliModel[]): string[] {
+  const gname = group.name.toLowerCase()
+  const listed = (group.description ?? '').split(':')[1] ?? ''
+  const vendors = listed
+    .split(',')
+    .map((s) => s.trim().toLowerCase().split(/\s+/)[0])
+    .filter(Boolean)
+  return catalog
+    .filter((m) => {
+      const name = m.name.toLowerCase()
+      const id = m.id.toLowerCase()
+      if (name.includes(gname) || gname.includes(name)) return true
+      return vendors.some((v) => id.startsWith(v) || name.startsWith(v))
+    })
+    .map((m) => m.id)
+}
+
+// ───────────────────────────── Antigravity per-model quota buckets ─────────────────────────────
+
+/** Antigravity meters model families separately (Gemini Pro, Gemini Flash, Anthropic, OpenAI). */
+export function agyModelFamily(modelId: string): { key: string; label: string } {
+  const id = modelId.toLowerCase()
+  if (id.includes('flash')) return { key: 'gemini-flash', label: 'Gemini Flash' }
+  if (id.startsWith('gemini') || id.includes('argon')) return { key: 'gemini-pro', label: 'Gemini Pro / Argon' }
+  if (id.startsWith('claude')) return { key: 'anthropic', label: 'Claude models' }
+  if (id.startsWith('gpt') || id.includes('oss')) return { key: 'openai', label: 'GPT-OSS' }
+  return { key: 'other', label: 'Other models' }
+}
+
+function agyFamilyBudget(key: string): number {
+  const pro = getSettings().agyTier === 'pro'
+  const base: Record<string, number> = { 'gemini-pro': 1_500_000, 'gemini-flash': 4_000_000, anthropic: 1_000_000, openai: 1_500_000, other: 1_000_000 }
+  return Math.round((base[key] ?? 1_000_000) * (pro ? 1 : 0.35))
+}
+
+// ───────────────────────────── Rate-limit events (expiring) ─────────────────────────────
+
+interface RateEvent {
+  cli: string
+  status: string
+  utilization_pct: number | null
+  resets_at: string | null
+  note: string
+  updated_at: string
+}
+
+/** A recorded rejection only counts until its reset time (or 5h after it was seen when the CLI gave no reset time). */
+function activeRateEvent(key: string, nowMs: number): RateEvent | undefined {
+  const ev = get<RateEvent>('SELECT * FROM cli_rate_events WHERE cli = ?', key)
+  if (!ev) return undefined
+  const until = ev.resets_at ? Date.parse(ev.resets_at) : Date.parse(ev.updated_at) + 5 * 3600_000
+  if (Number.isNaN(until) || until <= nowMs) return undefined
+  return ev
 }
 
 export async function computeLimitInfo(cli: CliId, authenticated: boolean, detectedPlan?: string, forceRefresh = false): Promise<CliLimitInfo> {
   const windowHours = 5
   const nowMs = Date.now()
-  const windowStartMs = nowMs - windowHours * 3600_000
-  const todayStartMs = nowMs - 24 * 3600_000
-  const weekStartMs = nowMs - 7 * 24 * 3600_000
-
+  const starts = { window: nowMs - windowHours * 3600_000, today: nowMs - 24 * 3600_000, week: nowMs - 7 * 24 * 3600_000 }
   const budget = windowBudgetFor(cli, detectedPlan)
 
-  if (!authenticated) {
-    return {
-      windowHours,
-      usedTokens: 0,
-      usedRequests: 0,
-      usedMs: 0,
-      maxRequestsWindow: budget.maxRequests,
-      maxTokensWindow: budget.maxTokens,
-      utilizationPct: 0,
-      status: 'unauthenticated',
-      resetsAt: null,
-      resetInLabel: 'Sign in required',
-      todayTokens: 0,
-      todayRequests: 0,
-      weekTokens: 0
-    }
-  }
-
-  const windowStats = get<{ tokens: number; reqs: number; ms: number; oldest: number | null }>(
-    `SELECT COALESCE(SUM(tokens), 0) AS tokens,
-            COUNT(*) AS reqs,
-            COALESCE(SUM(duration_ms), 0) AS ms,
-            MIN(epoch_ms) AS oldest
-     FROM usage_logs
-     WHERE cli = ? AND epoch_ms >= ?`,
-    cli,
-    windowStartMs
-  ) ?? { tokens: 0, reqs: 0, ms: 0, oldest: null }
-
-  const todayStats = get<{ tokens: number; reqs: number }>(
-    `SELECT COALESCE(SUM(tokens), 0) AS tokens, COUNT(*) AS reqs
-     FROM usage_logs WHERE cli = ? AND epoch_ms >= ?`,
-    cli,
-    todayStartMs
-  ) ?? { tokens: 0, reqs: 0 }
-
-  const weekStats = get<{ tokens: number }>(
-    `SELECT COALESCE(SUM(tokens), 0) AS tokens
-     FROM usage_logs WHERE cli = ? AND epoch_ms >= ?`,
-    cli,
-    weekStartMs
-  ) ?? { tokens: 0 }
-
-  const rateEv = get<{ status: string; utilization_pct: number | null; resets_at: string | null; note: string }>(
-    'SELECT * FROM cli_rate_events WHERE cli = ?',
-    cli
-  )
-
-  // 1. For Claude Code: use official Anthropic OAuth Usage endpoint (`five_hour` & `seven_day` utilization!)
-  if (cli === 'claude') {
-    const liveClaude = await fetchLiveClaudeOAuthUsage(forceRefresh)
-    if (liveClaude) {
-      const pct = rateEv?.status === 'rejected' ? 100 : liveClaude.fiveHourPct
-      let resetInLabel = '5h window ready'
-      if (liveClaude.fiveHourResetsAt) {
-        const resetMs = Date.parse(liveClaude.fiveHourResetsAt) - nowMs
-        if (resetMs > 0) resetInLabel = `Resets in ${formatDurationShort(resetMs)}`
-      }
-      let weeklyResetInLabel: string | undefined
-      if (liveClaude.sevenDayResetsAt) {
-        const wMs = Date.parse(liveClaude.sevenDayResetsAt) - nowMs
-        if (wMs > 0) weeklyResetInLabel = `7d resets in ${formatDurationShort(wMs)}`
-      }
-      const status: CliLimitInfo['status'] =
-        pct >= 100 ? 'rejected' : pct >= 80 ? 'warning' : 'ok'
-
-      return {
-        windowHours,
-        usedTokens: windowStats.tokens,
-        usedRequests: windowStats.reqs,
-        usedMs: windowStats.ms,
-        maxRequestsWindow: budget.maxRequests,
-        maxTokensWindow: budget.maxTokens,
-        utilizationPct: pct,
-        weeklyUtilizationPct: liveClaude.sevenDayPct,
-        weeklyResetInLabel,
-        status,
-        resetsAt: liveClaude.fiveHourResetsAt,
-        resetInLabel,
-        todayTokens: todayStats.tokens,
-        todayRequests: todayStats.reqs,
-        weekTokens: weekStats.tokens,
-        liveNote: `Weekly: ${liveClaude.sevenDayPct}% used`
-      }
-    }
-  }
-
-  // 2. For Antigravity: combine AI Hub usage_logs with real ~/.gemini/antigravity brain turns in the last 5h
-  if (cli === 'agy') {
-    const agyAct = scanAgyActivity(windowStartMs, todayStartMs)
-    windowStats.reqs = Math.max(windowStats.reqs, agyAct.windowTurns)
-    windowStats.tokens = Math.max(windowStats.tokens, agyAct.windowTokens)
-    todayStats.tokens = Math.max(todayStats.tokens, agyAct.todayTokens)
-    if (agyAct.oldestInWindowMs && (!windowStats.oldest || agyAct.oldestInWindowMs < windowStats.oldest)) {
-      windowStats.oldest = agyAct.oldestInWindowMs
-    }
-  }
-
-  const tokenPct = (windowStats.tokens / Math.max(1, budget.maxTokens)) * 100
-  const reqPct = (windowStats.reqs / Math.max(1, budget.maxRequests)) * 100
-  let utilizationPct = Math.min(100, Math.round(Math.max(tokenPct, reqPct)))
-
-  if (rateEv?.utilization_pct != null && rateEv.utilization_pct > utilizationPct) {
-    utilizationPct = Math.min(100, Math.round(rateEv.utilization_pct))
-  }
-  if (rateEv?.status === 'rejected') {
-    utilizationPct = 100
-  }
-
-  let resetsAt: string | null = null
-  let resetInLabel = '5h window ready'
-
-  if (rateEv?.resets_at) {
-    const resetEpoch = Date.parse(rateEv.resets_at)
-    if (!Number.isNaN(resetEpoch) && resetEpoch > nowMs) {
-      resetsAt = rateEv.resets_at
-      resetInLabel = `Resets in ${formatDurationShort(resetEpoch - nowMs)}`
-    }
-  }
-
-  if (!resetsAt && windowStats.oldest) {
-    const resetEpoch = windowStats.oldest + windowHours * 3600_000
-    if (resetEpoch > nowMs) {
-      resetsAt = new Date(resetEpoch).toISOString()
-      resetInLabel = `Resets in ${formatDurationShort(resetEpoch - nowMs)}`
-    }
-  }
-
-  const status: CliLimitInfo['status'] =
-    rateEv?.status === 'rejected' || utilizationPct >= 100
-      ? 'rejected'
-      : rateEv?.status === 'warning' || utilizationPct >= 80
-        ? 'warning'
-        : 'ok'
-
-  return {
+  const base: CliLimitInfo = {
     windowHours,
-    usedTokens: windowStats.tokens,
-    usedRequests: windowStats.reqs,
-    usedMs: windowStats.ms,
+    usedTokens: 0,
+    usedRequests: 0,
+    usedMs: 0,
     maxRequestsWindow: budget.maxRequests,
     maxTokensWindow: budget.maxTokens,
-    utilizationPct,
-    status,
-    resetsAt,
-    resetInLabel,
-    todayTokens: todayStats.tokens,
-    todayRequests: todayStats.reqs,
-    weekTokens: weekStats.tokens,
-    liveNote: windowStats.reqs > 0 ? `${windowStats.reqs} turns in 5h window` : undefined
+    utilizationPct: 0,
+    status: 'unauthenticated',
+    resetsAt: null,
+    resetInLabel: 'Sign in required',
+    todayTokens: 0,
+    todayRequests: 0,
+    weekTokens: 0,
+    source: 'estimated'
   }
+  if (!authenticated) return base
+
+  // AI Hub's own run log (always available)
+  const hub = (since: number): { tokens: number; reqs: number; ms: number; oldest: number | null } =>
+    get<{ tokens: number; reqs: number; ms: number; oldest: number | null }>(
+      `SELECT COALESCE(SUM(tokens), 0) AS tokens, COUNT(*) AS reqs, COALESCE(SUM(duration_ms), 0) AS ms, MIN(epoch_ms) AS oldest
+       FROM usage_logs WHERE cli = ? AND epoch_ms >= ?`,
+      cli,
+      since
+    ) ?? { tokens: 0, reqs: 0, ms: 0, oldest: null }
+  const win = hub(starts.window)
+  const today = hub(starts.today)
+  const week = hub(starts.week)
+  const out: CliLimitInfo = {
+    ...base,
+    status: 'ok',
+    resetInLabel: '5h window ready',
+    usedTokens: win.tokens,
+    usedRequests: win.reqs,
+    usedMs: win.ms,
+    todayTokens: today.tokens,
+    todayRequests: today.reqs,
+    weekTokens: week.tokens
+  }
+
+  const rateEv = activeRateEvent(cli, nowMs)
+
+  if (cli === 'claude') {
+    const tx = scanClaudeTranscripts(starts)
+    out.usedTokens = Math.max(win.tokens, tx.window.tokens)
+    out.usedRequests = Math.max(win.reqs, tx.window.turns)
+    out.todayTokens = Math.max(today.tokens, tx.today.tokens)
+    out.todayRequests = Math.max(today.reqs, tx.today.turns)
+    out.weekTokens = Math.max(week.tokens, tx.week.tokens)
+
+    const live = await fetchLiveClaudeOAuthUsage(forceRefresh)
+    if (live) {
+      const pct = rateEv?.status === 'rejected' ? 100 : live.fiveHour.pct
+      out.source = 'live'
+      out.utilizationPct = pct
+      out.status = statusFor(pct)
+      out.resetsAt = live.fiveHour.resetsAt
+      out.resetInLabel = resetLabel(live.fiveHour.resetsAt, nowMs)
+      out.weeklyUtilizationPct = live.sevenDay.pct
+      out.weeklyResetInLabel = live.sevenDay.resetsAt ? `7d resets in ${formatDurationShort(Date.parse(live.sevenDay.resetsAt) - nowMs)}` : undefined
+      out.liveNote = `Live from Anthropic · weekly ${live.sevenDay.pct}%`
+      const modelTokens = (re: RegExp): { tokens: number; turns: number } => {
+        let tokens = 0
+        let turns = 0
+        for (const [id, v] of tx.byModel) if (re.test(id)) ((tokens += v.tokens), (turns += v.turns))
+        return { tokens, turns }
+      }
+      out.modelBuckets = live.perModel.map((m) => {
+        const used = modelTokens(m.match)
+        return {
+          key: m.key,
+          label: m.label,
+          modelIds: [],
+          utilizationPct: m.window.pct,
+          usedTokens: used.tokens,
+          usedRequests: used.turns,
+          status: statusFor(m.window.pct),
+          resetInLabel: resetLabel(m.window.resetsAt, nowMs, '7d window ready'),
+          window: '7d' as const,
+          source: 'live' as const
+        }
+      })
+      return out
+    }
+  }
+
+  if (cli === 'codex') {
+    const live = readCodexLiveLimits(nowMs)
+    if (live) {
+      out.source = 'live'
+      out.utilizationPct = rateEv?.status === 'rejected' ? 100 : live.primary.pct
+      out.status = statusFor(out.utilizationPct)
+      out.resetsAt = live.primary.resetsAt
+      out.resetInLabel = resetLabel(live.primary.resetsAt, nowMs)
+      if (live.secondary) {
+        out.weeklyUtilizationPct = live.secondary.pct
+        out.weeklyResetInLabel = live.secondary.resetsAt ? `7d resets in ${formatDurationShort(Date.parse(live.secondary.resetsAt) - nowMs)}` : undefined
+      }
+      out.liveNote = 'Live from Codex session data'
+      return out
+    }
+  }
+
+  if (cli === 'agy') {
+    const tx = scanAgyTranscripts(starts)
+    out.usedTokens = Math.max(win.tokens, tx.window.tokens)
+    out.usedRequests = Math.max(win.reqs, tx.window.turns)
+    out.todayTokens = Math.max(today.tokens, tx.today.tokens)
+    out.todayRequests = Math.max(today.reqs, tx.today.turns)
+    out.weekTokens = Math.max(week.tokens, tx.week.tokens)
+    if (tx.window.oldest && (!win.oldest || tx.window.oldest < win.oldest)) win.oldest = tx.window.oldest
+
+    const live = await fetchAgyLiveQuota(forceRefresh)
+    if (live?.length) {
+      const catalog = dynamicAgyModels?.length ? dynamicAgyModels : CATALOG_MODELS.agy
+      const buckets: ModelLimitBucket[] = []
+      for (const g of live) {
+        const ids = agyGroupModels(g, catalog)
+        for (const b of g.buckets) {
+          const pct = Math.max(0, Math.min(100, Math.round((1 - (b.remaining_fraction ?? 1)) * 100)))
+          const weekly = /week/i.test(b.window)
+          buckets.push({
+            key: b.id,
+            label: `${g.name} · ${weekly ? 'weekly' : '5h'}`,
+            modelIds: ids,
+            utilizationPct: pct,
+            usedTokens: ids.reduce((sum, id) => sum + (tx.byModel.get(id)?.tokens ?? 0), 0),
+            usedRequests: ids.reduce((sum, id) => sum + (tx.byModel.get(id)?.turns ?? 0), 0),
+            status: statusFor(pct),
+            resetInLabel: resetLabel(b.reset_time, nowMs, weekly ? '7d window ready' : '5h window ready'),
+            window: weekly ? '7d' : '5h',
+            source: 'live'
+          })
+        }
+      }
+      const worst = (w: '5h' | '7d'): ModelLimitBucket | undefined =>
+        buckets.filter((b) => b.window === w).sort((a, b) => b.utilizationPct - a.utilizationPct)[0]
+      const five = worst('5h')
+      const week = worst('7d')
+      const rejected = rateEv?.status === 'rejected' && (five?.utilizationPct ?? 0) >= 99
+      out.source = 'live'
+      out.modelBuckets = buckets
+      out.utilizationPct = rejected ? 100 : (five?.utilizationPct ?? 0)
+      out.status = statusFor(out.utilizationPct)
+      out.resetInLabel = five?.resetInLabel ?? '5h window ready'
+      out.resetsAt = live.flatMap((g) => g.buckets).find((b) => b.id === five?.key)?.reset_time ?? null
+      if (week) {
+        out.weeklyUtilizationPct = week.utilizationPct
+        out.weeklyResetInLabel = week.resetInLabel.replace(/^Resets/, '7d resets')
+      }
+      out.liveNote = `Live from Antigravity · tightest weekly: ${week?.label ?? '—'}`
+      return out
+    }
+
+    // Per-family buckets: Antigravity applies separate quotas per model family
+    const families = new Map<string, { label: string; tokens: number; turns: number; oldest: number | null; ids: Set<string> }>()
+    const catalog = dynamicAgyModels?.length ? dynamicAgyModels : CATALOG_MODELS.agy
+    for (const m of catalog) {
+      const f = agyModelFamily(m.id)
+      const cur = families.get(f.key) ?? { label: f.label, tokens: 0, turns: 0, oldest: null, ids: new Set<string>() }
+      cur.ids.add(m.id)
+      families.set(f.key, cur)
+    }
+    for (const [model, v] of tx.byModel) {
+      if (model === 'unknown') continue
+      const f = families.get(agyModelFamily(model).key)
+      if (!f) continue
+      f.tokens += v.tokens
+      f.turns += v.turns
+      if (v.oldest && (f.oldest === null || v.oldest < f.oldest)) f.oldest = v.oldest
+    }
+    out.modelBuckets = [...families.entries()].map(([key, f]) => {
+      const ev = activeRateEvent(`agy:${key}`, nowMs)
+      const pct = ev?.status === 'rejected' ? 100 : Math.min(100, Math.round((f.tokens / agyFamilyBudget(key)) * 100))
+      const resetIso = ev?.resets_at ?? (f.oldest ? new Date(f.oldest + windowHours * 3600_000).toISOString() : null)
+      return {
+        key,
+        label: f.label,
+        modelIds: [...f.ids],
+        utilizationPct: pct,
+        usedTokens: f.tokens,
+        usedRequests: f.turns,
+        status: statusFor(pct),
+        resetInLabel: resetLabel(resetIso, nowMs),
+        window: '5h' as const,
+        source: ev ? ('live' as const) : ('estimated' as const)
+      }
+    })
+    const unknown = tx.byModel.get('unknown')
+    if (unknown) out.liveNote = `${unknown.turns} turns from Antigravity outside AI Hub (model not recorded)`
+  }
+
+  // Estimated path (Gemini, Copilot, Antigravity overall, and offline fallbacks)
+  const tokenPct = (out.usedTokens / Math.max(1, budget.maxTokens)) * 100
+  const reqPct = (out.usedRequests / Math.max(1, budget.maxRequests)) * 100
+  let utilizationPct = Math.min(100, Math.round(Math.max(tokenPct, reqPct)))
+  const bucketMax = Math.max(0, ...(out.modelBuckets ?? []).map((b) => b.utilizationPct))
+  if (bucketMax > utilizationPct) utilizationPct = bucketMax
+  if (rateEv?.utilization_pct != null && rateEv.utilization_pct > utilizationPct) utilizationPct = Math.min(100, Math.round(rateEv.utilization_pct))
+  if (rateEv?.status === 'rejected') utilizationPct = 100
+
+  let resetsAt: string | null = rateEv?.resets_at ?? null
+  if (!resetsAt && win.oldest) {
+    const resetEpoch = win.oldest + windowHours * 3600_000
+    if (resetEpoch > nowMs) resetsAt = new Date(resetEpoch).toISOString()
+  }
+  out.utilizationPct = utilizationPct
+  out.resetsAt = resetsAt
+  out.resetInLabel = resetLabel(resetsAt, nowMs)
+  out.status = rateEv?.status === 'rejected' ? 'rejected' : rateEv?.status === 'warning' ? (utilizationPct >= 100 ? 'rejected' : 'warning') : statusFor(utilizationPct)
+  if (!out.liveNote && out.usedRequests > 0) out.liveNote = `${out.usedRequests} turns in 5h window (estimated budget)`
+  return out
 }
+
 
 export function recordCliUsage(opts: {
   cli: CliId
@@ -896,8 +1235,10 @@ export function recordCliUsage(opts: {
   durationMs: number
 }): void {
   if (opts.tokens <= 0 && opts.durationMs <= 0) return
-  if (opts.cli === 'claude') cachedClaudeOAuthUsage = null
-  if (opts.cli === 'agy') cachedAgyBrainActivity = null
+  if (opts.cli === 'claude') ((cachedClaudeOAuthUsage = null), (cachedClaudeTranscripts = null))
+  if (opts.cli === 'agy') ((cachedAgyTranscripts = null), (cachedAgyQuota = null))
+  if (opts.cli === 'codex') cachedCodexLive = null
+  statusCache = null
   run(
     `INSERT INTO usage_logs (cli, model, project_id, task_id, tokens, cost_usd, duration_ms, created_at, epoch_ms)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1083,17 +1424,60 @@ export function resolveCliModelWithEffort(
     }
     return { cliModelArg: `${base}-${agyEffort}`, effortArg: agyEffort }
   }
-  return { cliModelArg: modelId, effortArg: cleanEffort }
+  // Clamp to what the chosen model actually supports (e.g. Codex has no xhigh/max)
+  const known = modelsForCli(cli).find((m) => m.id === modelId)
+  const supported: EffortLevel[] = known?.efforts?.length ? known.efforts : cli === 'claude' ? ['low', 'medium', 'high', 'xhigh', 'max'] : ['low', 'medium', 'high']
+  return { cliModelArg: modelId, effortArg: clampEffort(cleanEffort, supported, known?.defaultEffort) }
 }
+
+const EFFORT_ORDER: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/** Pick the supported effort closest to (and not above) the requested one. */
+export function clampEffort(effort: EffortLevel, supported: EffortLevel[], fallback?: EffortLevel): EffortLevel {
+  if (supported.includes(effort)) return effort
+  const want = EFFORT_ORDER.indexOf(effort)
+  const below = supported.filter((e) => EFFORT_ORDER.indexOf(e) <= want).sort((a, b) => EFFORT_ORDER.indexOf(b) - EFFORT_ORDER.indexOf(a))[0]
+  return below ?? fallback ?? supported[0] ?? 'medium'
+}
+
+let lastModels: Partial<Record<CliId, CliModel[]>> = {}
+
+/** Models known for a CLI (live list from the last status scan, else the built-in catalog). */
+export function modelsForCli(cli: CliId): CliModel[] {
+  return lastModels[cli]?.length ? lastModels[cli]! : cli === 'claude' ? loadClaudeCatalogModels() : CATALOG_MODELS[cli]
+}
+
+/** A CLI can take over work only if it is installed AND signed in. */
+export function isCliReady(cli: CliId): boolean {
+  const exe = findCliExecutable(cli)
+  return Boolean(exe) && detectAuth(cli, exe).authenticated
+}
+
+let statusCache: { at: number; value: CliSubscriptionStatus[] } | null = null
+let statusInFlight: Promise<CliSubscriptionStatus[]> | null = null
 
 export const clis = {
   /** All 5 AI subscriptions with live authentication state, up-to-date models, and live 5-hour/7-day usage limits. */
+  /** Cached for a few seconds: the renderer re-requests this on every DB change while a run streams. */
   statusAll: async (forceRefresh = false): Promise<CliSubscriptionStatus[]> => {
+    if (!forceRefresh && statusCache && Date.now() - statusCache.at < 8000) return statusCache.value
+    if (!forceRefresh && statusInFlight) return statusInFlight
     if (forceRefresh) {
       dynamicAgyModels = null
       cachedClaudeOAuthUsage = null
-      cachedAgyBrainActivity = null
+      cachedClaudeTranscripts = null
+      cachedAgyTranscripts = null
+      cachedAgyQuota = null
+      cachedCodexLive = null
+      exeCache.clear()
     }
+    statusInFlight = clis.computeStatus(forceRefresh).finally(() => {
+      statusInFlight = null
+    })
+    return statusInFlight
+  },
+
+  computeStatus: async (forceRefresh: boolean): Promise<CliSubscriptionStatus[]> => {
     const meta: {
       id: CliId
       name: string
@@ -1104,15 +1488,6 @@ export const clis = {
       installCommand: string
     }[] = [
       {
-        id: 'agy',
-        name: 'Antigravity',
-        shortName: 'Antigravity',
-        provider: 'Google DeepMind',
-        accentColor: '#38bdf8',
-        loginCommand: 'agy',
-        installCommand: 'irm https://antigravity.google/cli/install.ps1 | iex'
-      },
-      {
         id: 'claude',
         name: 'Claude Code',
         shortName: 'Claude',
@@ -1120,6 +1495,15 @@ export const clis = {
         accentColor: '#d97757',
         loginCommand: 'claude login',
         installCommand: 'npm install -g @anthropic-ai/claude-code'
+      },
+      {
+        id: 'agy',
+        name: 'Antigravity',
+        shortName: 'Antigravity',
+        provider: 'Google DeepMind',
+        accentColor: '#38bdf8',
+        loginCommand: 'agy',
+        installCommand: 'irm https://antigravity.google/cli/install.ps1 | iex'
       },
       {
         id: 'codex',
@@ -1150,8 +1534,9 @@ export const clis = {
       }
     ]
 
+    // Each CLI is independent (Antigravity's /usage takes a few seconds) — gather them in parallel
     const out: CliSubscriptionStatus[] = []
-    for (const m of meta) {
+    await Promise.all(meta.map(async (m, index) => {
       const exePath = findCliExecutable(m.id)
       const auth = detectAuth(m.id, exePath)
       const budget = windowBudgetFor(m.id, auth.detectedPlan)
@@ -1166,7 +1551,7 @@ export const clis = {
 
       const limit = await computeLimitInfo(m.id, auth.authenticated, auth.detectedPlan, forceRefresh)
 
-      out.push({
+      out[index] = {
         id: m.id,
         name: m.name,
         shortName: m.shortName,
@@ -1182,13 +1567,16 @@ export const clis = {
         installCommand: m.installCommand,
         models,
         limit
-      })
-    }
+      }
+      lastModels[m.id] = models
+    }))
+    statusCache = { at: Date.now(), value: out }
     return out
   },
 
   clearRateLimit: (cli: CliId): true => {
-    run('DELETE FROM cli_rate_events WHERE cli = ?', cli)
+    run("DELETE FROM cli_rate_events WHERE cli = ? OR cli LIKE ?", cli, `${cli}:%`)
+    statusCache = null
     return true
   },
 

@@ -44,6 +44,7 @@ import type {
 } from '@shared/types'
 import { CliAvatar, CliSpinner } from './components/CliAvatars'
 import { EmbeddedTerminal } from './components/EmbeddedTerminal'
+import { GitControls } from './components/GitControls'
 import { KnowledgeBaseView } from './components/KnowledgeBaseView'
 import { LiveLimitsModal, SubscriptionStatusStrip } from './components/LiveLimitsModal'
 import { SubscriptionComposer } from './components/SubscriptionComposer'
@@ -68,9 +69,9 @@ export default function App(): React.JSX.Element {
   const [activeTaskId, setActiveTaskId] = useState<number | null>(null)
 
   // Composer state
-  const [selectedCli, setSelectedCli] = useState<CliId>('agy')
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-4-argon')
-  const [selectedEffort, setSelectedEffort] = useState<EffortLevel>('high')
+  const [selectedCli, setSelectedCli] = useState<CliId>('claude')
+  const [selectedModel, setSelectedModel] = useState<string>('claude-opus-5-5')
+  const [selectedEffort, setSelectedEffort] = useState<EffortLevel>('medium')
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default')
   const [checkoutMode, setCheckoutMode] = useState<CheckoutMode>('local')
   const [submitMode, setSubmitMode] = useState<'thread' | 'task'>('thread')
@@ -102,7 +103,7 @@ export default function App(): React.JSX.Element {
     if (!clis?.length) return
     const cur = clis.find((c) => c.id === selectedCli)
     if (cur && !cur.authenticated) {
-      const firstAuth = clis.find((c) => c.authenticated)
+      const firstAuth = clis.find((c) => c.id === 'claude' && c.authenticated) ?? clis.find((c) => c.authenticated)
       if (firstAuth) {
         setSelectedCli(firstAuth.id)
         if (firstAuth.models[0]) setSelectedModel(firstAuth.models[0].id)
@@ -113,6 +114,29 @@ export default function App(): React.JSX.Element {
       setSelectedModel(cur.models[0].id)
     }
   }, [clis, selectedCli, selectedModel])
+
+  // The effort actually sent: clamp to what the selected model supports (the picker only *displayed* the clamp before)
+  const selectedModelObj = clis?.find((c) => c.id === selectedCli)?.models.find((m) => m.id === selectedModel)
+  const effectiveEffort: EffortLevel =
+    selectedModelObj?.efforts?.length && !selectedModelObj.efforts.includes(selectedEffort)
+      ? selectedModelObj.defaultEffort || selectedModelObj.efforts[selectedModelObj.efforts.length - 1]
+      : selectedEffort
+
+  /** Model/effort choices stick per project (stored as the project's defaults). */
+  const rememberChoice = (d: { cli?: CliId; model?: string; effort?: EffortLevel }): void => {
+    if (currentProject) api.projects.setDefaults(currentProject.id, d).catch(() => undefined)
+  }
+  const handleSelectCliModel = (c: CliId, m: string): void => {
+    setSelectedCli(c)
+    setSelectedModel(m)
+    rememberChoice({ cli: c, model: m })
+  }
+  const handleChangeEffort = (e: EffortLevel): void => {
+    setSelectedEffort(e)
+    rememberChoice({ effort: e })
+  }
+
+  const { data: skillsList } = useData(() => api.skills.list(currentProject?.id).catch(() => []), [currentProject?.id])
 
   const { data: tasks } = useData(
     () => (currentProject ? api.projects.tasks(currentProject.id) : Promise.resolve([])),
@@ -164,7 +188,7 @@ export default function App(): React.JSX.Element {
         api.projects.reply(activeTask.id, prompt, {
           cli: selectedCli,
           model: selectedModel,
-          effort: selectedEffort,
+          effort: effectiveEffort,
           permissionMode,
           mentions
         })
@@ -179,7 +203,7 @@ export default function App(): React.JSX.Element {
         kind: mode,
         cli: selectedCli,
         model: selectedModel,
-        effort: selectedEffort,
+        effort: effectiveEffort,
         permissionMode,
         checkoutMode: mode === 'task' ? 'worktree' : checkoutMode,
         mentions,
@@ -198,20 +222,17 @@ export default function App(): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0b0c10] text-zinc-100">
+    <div className="dark flex h-screen w-screen flex-col overflow-hidden text-zinc-100">
       {/* Custom Top Title Bar */}
       <header
-        className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.07] bg-[#0e1016]/90 pr-[145px] pl-3.5 backdrop-blur-xl select-none"
+        className="glass-bar flex h-10 shrink-0 items-center justify-between border-b pr-[145px] pl-3.5 select-none"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         <div className="flex items-center gap-2.5">
-          <div className="flex size-5 items-center justify-center rounded-md bg-gradient-to-br from-indigo-500 to-sky-400 text-white shadow-sm">
+          <div className="flex size-5 items-center justify-center rounded-md bg-accent text-white shadow-[0_2px_8px_rgba(99,102,241,0.45)]">
             <Layers size={12} />
           </div>
           <span className="text-[13px] font-semibold tracking-tight text-zinc-100">AI Hub</span>
-          <span className="rounded border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.2 text-[10px] font-medium text-zinc-400">
-            Subscriptions Workspace
-          </span>
         </div>
 
         {/* Live Subscription Status Strip in TitleBar */}
@@ -254,7 +275,7 @@ export default function App(): React.JSX.Element {
       {/* Main Layout: Left Sidebar + Center Workspace */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Left Sidebar: Projects & Recent Threads */}
-        <aside className="flex w-64 shrink-0 flex-col border-r border-white/[0.07] bg-[#0e1015]/75">
+        <aside className="glass-sidebar flex w-[248px] shrink-0 flex-col rounded-tr-xl border-t border-r">
           {/* New Interactive Session Button */}
           <div className="p-3">
             <button
@@ -263,9 +284,9 @@ export default function App(): React.JSX.Element {
                 setActiveTab('session')
                 setActiveTaskId(null)
               }}
-              className="btn w-full justify-start gap-2 border-white/[0.1] bg-white/[0.06] py-2 text-[13px] font-medium text-white hover:bg-white/[0.1]"
+              className="btn h-9 w-full justify-start gap-2 text-[13px]"
             >
-              <MessageSquarePlus size={15} className="text-[#e89a6c]" />
+              <MessageSquarePlus size={15} className="text-indigo-300" />
               <span>New AI Session</span>
             </button>
           </div>
@@ -273,7 +294,7 @@ export default function App(): React.JSX.Element {
           {/* Projects Section */}
           <div className="px-3 pt-1 pb-2">
             <div className="mb-1.5 flex items-center justify-between px-1.5">
-              <span className="text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">Projects</span>
+              <span className="eyebrow">Projects</span>
               <button
                 type="button"
                 onClick={() => setEditingProject({ name: '', folder: '', notes: '', check_cmd: '' })}
@@ -290,11 +311,8 @@ export default function App(): React.JSX.Element {
                 return (
                   <div
                     key={p.id}
-                    className={cx(
-                      'group flex items-center gap-1 rounded-lg px-2 py-1.5 transition-colors',
-                      isSelected ? 'bg-white/[0.09] font-medium text-white' : 'text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200',
-                      p.archived_at && 'opacity-45'
-                    )}
+                    data-on={isSelected}
+                    className={cx('nav-item group gap-1', p.archived_at && 'opacity-45')}
                   >
                     <button
                       type="button"
@@ -330,9 +348,7 @@ export default function App(): React.JSX.Element {
           {/* Recent Interactive Sessions for Current Project */}
           <div className="flex min-h-0 flex-1 flex-col px-3 py-2">
             <div className="mb-1.5 flex items-center justify-between px-1.5">
-              <span className="text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">
-                {currentProject ? `${currentProject.name} Sessions` : 'Sessions'}
-              </span>
+              <span className="eyebrow">Sessions</span>
               <span className="text-[11px] text-zinc-500">{threads.length}</span>
             </div>
 
@@ -346,13 +362,7 @@ export default function App(): React.JSX.Element {
                   const active = activeTab === 'session' && activeTaskId === t.id
                   const cliUsed = (t.runner || t.cli || 'agy') as CliId
                   return (
-                    <div
-                      key={t.id}
-                      className={cx(
-                        'group flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] transition-colors',
-                        active ? 'bg-indigo-500/18 font-medium text-white' : 'text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200'
-                      )}
-                    >
+                    <div key={t.id} data-on={active} className="nav-item group text-[12.5px]">
                       <button
                         type="button"
                         onClick={() => {
@@ -388,10 +398,8 @@ export default function App(): React.JSX.Element {
                 type="button"
                 onClick={() => setActiveTab('kb')}
                 className={cx(
-                  'flex w-full cursor-pointer items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors',
-                  activeTab === 'kb'
-                    ? 'border-indigo-400/40 bg-indigo-500/15 text-white'
-                    : 'border-white/[0.08] bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06]'
+                  'card flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left transition-colors hover:bg-white/[0.07]',
+                  activeTab === 'kb' && 'border-indigo-400/40 bg-indigo-500/15'
                 )}
               >
                 <div className="flex items-center gap-2">
@@ -412,7 +420,7 @@ export default function App(): React.JSX.Element {
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {/* Project Workspace Sub-Navigation Bar */}
           {currentProject && (
-            <div className="flex shrink-0 items-center justify-between border-b border-white/[0.07] bg-[#101218]/60 px-6 py-2.5">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-6 pt-3 pb-2.5">
               <div className="flex items-center gap-4">
                 <div>
                   <div className="flex items-center gap-2">
@@ -421,25 +429,23 @@ export default function App(): React.JSX.Element {
                       <button
                         type="button"
                         onClick={() => api.app.openPath(currentProject.folder)}
-                        className="inline-flex cursor-pointer items-center gap-1 rounded bg-white/[0.05] px-2 py-0.5 font-mono text-[11px] text-zinc-400 hover:bg-white/[0.1] hover:text-zinc-200"
+                        className="chip h-6 px-2 font-mono text-[11px] text-zinc-400"
                         title="Open folder in Explorer"
                       >
                         <FolderOpen size={11} /> {currentProject.folder}
                       </button>
                     )}
+                    <GitControls project={currentProject} />
                   </div>
                 </div>
               </div>
 
               {/* Workspace Mode Tabs: Agent Session | Task Queue | Shared Knowledge Base */}
-              <div className="flex items-center gap-1 rounded-xl border border-white/[0.08] bg-black/35 p-1">
+              <div className="segmented">
                 <button
                   type="button"
                   onClick={() => setActiveTab('session')}
-                  className={cx(
-                    'inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1 text-[12.5px] font-medium transition-colors',
-                    activeTab === 'session' ? 'bg-white/[0.12] text-white' : 'text-zinc-400 hover:text-zinc-200'
-                  )}
+                  data-on={activeTab === 'session'}
                 >
                   <MessageSquare size={13} />
                   <span>Agent Workspace</span>
@@ -448,10 +454,7 @@ export default function App(): React.JSX.Element {
                 <button
                   type="button"
                   onClick={() => setActiveTab('queue')}
-                  className={cx(
-                    'inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1 text-[12.5px] font-medium transition-colors',
-                    activeTab === 'queue' ? 'bg-white/[0.12] text-white' : 'text-zinc-400 hover:text-zinc-200'
-                  )}
+                  data-on={activeTab === 'queue'}
                 >
                   <ListChecks size={13} />
                   <span>Task Queue</span>
@@ -465,10 +468,7 @@ export default function App(): React.JSX.Element {
                 <button
                   type="button"
                   onClick={() => setActiveTab('kb')}
-                  className={cx(
-                    'inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1 text-[12.5px] font-medium transition-colors',
-                    activeTab === 'kb' ? 'bg-white/[0.12] text-white' : 'text-zinc-400 hover:text-zinc-200'
-                  )}
+                  data-on={activeTab === 'kb'}
                 >
                   <BookOpen size={13} />
                   <span>Knowledge Base</span>
@@ -489,9 +489,9 @@ export default function App(): React.JSX.Element {
                   <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8">
                     <div className="w-full max-w-[780px] space-y-6">
                       <div className="space-y-1.5 text-center">
-                        <div className="mx-auto mb-2 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-[12px] text-zinc-300">
+                        <div className="chip mx-auto mb-2 cursor-default">
                           <CliAvatar cli={selectedCli} size={15} />
-                          <span>Centralized AI Subscriptions — Zero API Credit Cost</span>
+                          <span>Your subscriptions, one workspace</span>
                         </div>
                         <h2 className="text-2xl font-semibold tracking-tight text-white">
                           What are we building in {currentProject?.name ?? 'your project'}?
@@ -519,11 +519,9 @@ export default function App(): React.JSX.Element {
                         selectedCli={selectedCli}
                         selectedModel={selectedModel}
                         selectedEffort={selectedEffort}
-                        onSelectCliModel={(c, m) => {
-                          setSelectedCli(c)
-                          setSelectedModel(m)
-                        }}
-                        onChangeEffort={setSelectedEffort}
+                        onSelectCliModel={handleSelectCliModel}
+                        onChangeEffort={handleChangeEffort}
+                        skills={skillsList ?? []}
                         permissionMode={permissionMode}
                         onChangePermissionMode={setPermissionMode}
                         checkoutMode={checkoutMode}
@@ -599,7 +597,7 @@ export default function App(): React.JSX.Element {
                       </div>
                     </div>
 
-                    <div className="shrink-0 border-t border-white/[0.07] bg-[#0e1016]/90 px-6 py-3">
+                    <div className="shrink-0 px-6 pt-2 pb-4">
                       <div className="mx-auto max-w-[880px]">
                         <SubscriptionComposer
                           projects={projectsList ?? []}
@@ -610,11 +608,9 @@ export default function App(): React.JSX.Element {
                           selectedCli={selectedCli}
                           selectedModel={selectedModel}
                           selectedEffort={selectedEffort}
-                          onSelectCliModel={(c, m) => {
-                            setSelectedCli(c)
-                            setSelectedModel(m)
-                          }}
-                          onChangeEffort={setSelectedEffort}
+                          onSelectCliModel={handleSelectCliModel}
+                          onChangeEffort={handleChangeEffort}
+                          skills={skillsList ?? []}
                           permissionMode={permissionMode}
                           onChangePermissionMode={setPermissionMode}
                           checkoutMode={activeTask.checkout_mode}
@@ -635,7 +631,7 @@ export default function App(): React.JSX.Element {
                           onRefreshClis={reloadClis}
                           isRunning={activeTask.run_state === 'running'}
                           onStop={() => act(api.projects.stop(activeTask.id), 'Stopped')}
-                          placeholder={`Reply or continue with ${selectedCli.toUpperCase()} (${selectedModel} · ${selectedEffort})…`}
+                          placeholder={`Reply to ${clis?.find((c) => c.id === selectedCli)?.shortName ?? selectedCli} · ${selectedModelObj?.name ?? selectedModel} · ${effectiveEffort} effort — type / for skills`}
                           onSubmit={handleComposerSubmit}
                         />
                       </div>
@@ -654,12 +650,10 @@ export default function App(): React.JSX.Element {
                     clis={clis ?? []}
                     selectedCli={selectedCli}
                     selectedModel={selectedModel}
-                    selectedEffort={selectedEffort}
-                    onSelectCliModel={(c, m) => {
-                      setSelectedCli(c)
-                      setSelectedModel(m)
-                    }}
-                    onChangeEffort={setSelectedEffort}
+                    selectedEffort={effectiveEffort}
+                    onSelectCliModel={handleSelectCliModel}
+                    onChangeEffort={handleChangeEffort}
+                    skills={skillsList ?? []}
                     permissionMode={permissionMode}
                     onChangePermissionMode={setPermissionMode}
                     projectFiles={projectFiles ?? []}
@@ -687,7 +681,7 @@ export default function App(): React.JSX.Element {
 
           {/* Bottom Toggleable Embedded Terminal Drawer */}
           {showTerminal && (
-            <div className="h-72 shrink-0 border-t border-white/[0.1] bg-[#0a0b0f] p-2">
+            <div className="h-72 shrink-0 px-3 pb-3">
               <EmbeddedTerminal
                 sessionId={`proj-${currentProject?.id ?? 0}`}
                 cwd={activeTask?.worktree || currentProject?.folder || ''}
@@ -736,10 +730,8 @@ export default function App(): React.JSX.Element {
             <div
               key={t.id}
               className={cx(
-                'rounded-xl border px-3.5 py-2 text-[12.5px] font-medium shadow-xl backdrop-blur-xl',
-                t.isError
-                  ? 'border-red-500/40 bg-red-950/90 text-red-200'
-                  : 'border-white/[0.12] bg-[#181a22]/95 text-white'
+                'glass-float pop-in max-w-sm rounded-xl px-3.5 py-2 text-[12.5px] font-medium',
+                t.isError ? 'border-red-500/40 text-red-200' : 'text-white'
               )}
             >
               {t.text}
@@ -840,25 +832,11 @@ function ActiveSessionStream({
 
         {/* Session Actions & Sub-tabs */}
         <div className="flex flex-wrap items-center gap-1.5">
-          <div className="flex rounded-lg border border-white/[0.08] bg-black/30 p-0.5">
-            <button
-              type="button"
-              onClick={() => setSubTab('stream')}
-              className={cx(
-                'cursor-pointer rounded-md px-2.5 py-1 text-[12px] font-medium',
-                subTab === 'stream' ? 'bg-white/[0.12] text-white' : 'text-zinc-400 hover:text-zinc-200'
-              )}
-            >
+          <div className="segmented">
+            <button type="button" onClick={() => setSubTab('stream')} data-on={subTab === 'stream'}>
               Live Stream ({logs?.length ?? 0})
             </button>
-            <button
-              type="button"
-              onClick={() => setSubTab('changes')}
-              className={cx(
-                'cursor-pointer rounded-md px-2.5 py-1 text-[12px] font-medium',
-                subTab === 'changes' ? 'bg-white/[0.12] text-white' : 'text-zinc-400 hover:text-zinc-200'
-              )}
-            >
+            <button type="button" onClick={() => setSubTab('changes')} data-on={subTab === 'changes'}>
               Changes ({changes?.files.length ?? 0})
             </button>
           </div>
@@ -903,7 +881,7 @@ function ActiveSessionStream({
           {(logs ?? []).map((l, i) => {
             if (l.kind === 'you') {
               return (
-                <div key={i} className="ml-auto max-w-[85%] rounded-2xl border border-white/[0.1] bg-[#1e2029] px-4 py-2.5 text-[13.5px] text-zinc-100">
+                <div key={i} className="ml-auto max-w-[85%] rounded-2xl border border-indigo-400/20 bg-indigo-500/[0.12] px-4 py-2.5 text-[13.5px] text-zinc-100 backdrop-blur-md">
                   <div className="mb-1 flex items-center justify-between text-[11px] text-zinc-400">
                     <span className="font-semibold text-zinc-300">You</span>
                     <span>{relative(l.at)}</span>
@@ -1095,7 +1073,8 @@ function ProjectTaskQueueView({
   onOpenKnowledgeBase,
   onAuthenticateCli,
   onRefreshClis,
-  onOpenSession
+  onOpenSession,
+  skills
 }: {
   project: Project
   tasks: ProjectTask[]
@@ -1113,6 +1092,7 @@ function ProjectTaskQueueView({
   onAuthenticateCli: (c: CliSubscriptionStatus) => void
   onRefreshClis: () => void
   onOpenSession: (id: number) => void
+  skills: import('@shared/types').SkillInfo[]
 }): React.JSX.Element {
   const [showDone, setShowDone] = useState(false)
   const doing = tasks.filter((t) => t.status === 'doing')
@@ -1297,7 +1277,8 @@ function ProjectTaskQueueView({
         onOpenKnowledgeBase={onOpenKnowledgeBase}
         onAuthenticateCli={onAuthenticateCli}
         onRefreshClis={onRefreshClis}
-        placeholder="Add a task to the queue (Enter adds to queue)…"
+        skills={skills}
+        placeholder="Add a task to the queue (Enter adds to queue) — type / for skills…"
         submitMode="task"
         onSubmit={async (prompt, mentions) => {
           await act(
@@ -1320,13 +1301,13 @@ function ProjectTaskQueueView({
 
       {doing.length > 0 && (
         <section className="space-y-1.5">
-          <h3 className="text-[11.5px] font-semibold tracking-wider text-emerald-400 uppercase">In Progress ({doing.length})</h3>
+          <h3 className="eyebrow text-emerald-400">In Progress ({doing.length})</h3>
           <div className="card divide-y divide-white/[0.06] border-emerald-500/30">{doing.map((t) => renderTaskRow(t))}</div>
         </section>
       )}
 
       <section className="space-y-1.5">
-        <h3 className="text-[11.5px] font-semibold tracking-wider text-zinc-400 uppercase">Queued ({queued.length})</h3>
+        <h3 className="eyebrow">Queued ({queued.length})</h3>
         {queued.length === 0 ? (
           <div className="card p-6 text-center text-[13px] text-zinc-400">
             No tasks waiting in the queue. Use the composer above to queue tasks for Claude Code or Antigravity.
@@ -1522,7 +1503,69 @@ function SettingsModal({ settings, onClose }: { settings: Settings; onClose: () 
           />
         </Field>
 
+        <Field label="GitHub Copilot CLI Path (leave empty for auto-detection)">
+          <input
+            className="input font-mono text-[12px]"
+            value={s.copilotPath}
+            onChange={(e) => setS({ ...s, copilotPath: e.target.value })}
+            placeholder="Auto-detect copilot"
+          />
+        </Field>
+
+        <div className="grid grid-cols-2 gap-3 pt-1">
+          <Field label="Default AI for new projects">
+            <select
+              className="input h-9 text-[12.5px]"
+              value={s.defaultCli}
+              onChange={(e) => setS({ ...s, defaultCli: e.target.value as Settings['defaultCli'] })}
+            >
+              <option value="claude">Claude Code</option>
+              <option value="agy">Antigravity</option>
+              <option value="codex">OpenAI Codex</option>
+              <option value="gemini">Gemini CLI</option>
+              <option value="copilot">GitHub Copilot</option>
+            </select>
+          </Field>
+          <Field label="Default effort">
+            <select
+              className="input h-9 text-[12.5px]"
+              value={s.defaultEffort}
+              onChange={(e) => setS({ ...s, defaultEffort: e.target.value as EffortLevel })}
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+              <option value="max">Max</option>
+            </select>
+          </Field>
+        </div>
+
+        <Field
+          label="Knowledge base in prompts"
+          hint="Compact sends notes + rules and a short index; the AI opens .ai-kb / graphify files only when it needs them. Saves tokens on every new session and handover."
+        >
+          <div className="segmented">
+            <button type="button" data-on={s.kbPromptMode === 'compact'} onClick={() => setS({ ...s, kbPromptMode: 'compact' })}>
+              Compact (recommended)
+            </button>
+            <button type="button" data-on={s.kbPromptMode === 'full'} onClick={() => setS({ ...s, kbPromptMode: 'full' })}>
+              Full inline
+            </button>
+          </div>
+        </Field>
+
         <div className="space-y-2 pt-2">
+          <label className="flex cursor-pointer items-center gap-2 text-[13px] text-zinc-200">
+            <input
+              type="checkbox"
+              checked={s.useGraphify}
+              onChange={(e) => setS({ ...s, useGraphify: e.target.checked })}
+              className="accent-indigo-500"
+            />
+            Build a graphify code graph when scanning the codebase (no AI tokens; needs `pip install graphifyy`)
+          </label>
+
           <label className="flex cursor-pointer items-center gap-2 text-[13px] text-zinc-200">
             <input
               type="checkbox"

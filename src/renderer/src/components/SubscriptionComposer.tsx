@@ -16,6 +16,7 @@ import {
   Shield,
   Square,
   Terminal,
+  Wand2,
   X
 } from 'lucide-react'
 import type {
@@ -26,7 +27,8 @@ import type {
   KnowledgeEntry,
   MentionItem,
   PermissionMode,
-  Project
+  Project,
+  SkillInfo
 } from '@shared/types'
 import { CliAvatar } from './CliAvatars'
 import { cx } from './ui'
@@ -48,6 +50,7 @@ interface SubscriptionComposerProps {
   onChangeCheckoutMode: (c: CheckoutMode) => void
   projectFiles: string[]
   knowledgeEntries: KnowledgeEntry[]
+  skills?: SkillInfo[]
   onOpenKnowledgeBase: () => void
   onAuthenticateCli: (cli: CliSubscriptionStatus) => void
   onRefreshClis: () => void
@@ -124,6 +127,7 @@ export function SubscriptionComposer({
   onChangeCheckoutMode,
   projectFiles,
   knowledgeEntries,
+  skills = [],
   onOpenKnowledgeBase,
   onAuthenticateCli,
   onRefreshClis,
@@ -136,7 +140,8 @@ export function SubscriptionComposer({
 }: SubscriptionComposerProps): React.JSX.Element {
   const [text, setText] = useState('')
   const [mentions, setMentions] = useState<MentionItem[]>([])
-  const [openMenu, setOpenMenu] = useState<'project' | 'model' | 'effort' | 'mode' | 'checkout' | 'attach' | null>(null)
+  const [openMenu, setOpenMenu] = useState<'project' | 'model' | 'effort' | 'mode' | 'checkout' | 'attach' | 'skill' | null>(null)
+  const [skillQuery, setSkillQuery] = useState('')
   const [menuPos, setMenuPos] = useState<FixedMenuPos>({ left: 0, top: 0, maxHeight: 340 })
   const [previewCliId, setPreviewCliId] = useState<CliId>(selectedCli)
   const [fileFilter, setFileFilter] = useState('')
@@ -171,7 +176,7 @@ export function SubscriptionComposer({
   }, [])
 
   const toggleMenu = (
-    which: 'project' | 'model' | 'effort' | 'mode' | 'checkout' | 'attach',
+    which: 'project' | 'model' | 'effort' | 'mode' | 'checkout' | 'attach' | 'skill',
     btn: HTMLElement | null,
     width: number,
     height = 360,
@@ -209,6 +214,15 @@ export function SubscriptionComposer({
     : activeModelObj.defaultEffort || availableEfforts[availableEfforts.length - 1] || 'high'
 
   const pinnedKbCount = knowledgeEntries.filter((k) => k.pinned).length
+  // Model-specific quota (Antigravity families, Claude Opus/Sonnet weekly) for the selected model
+  // The tightest limit this model draws from (a model can sit in several: group 5h, group weekly, its own weekly)
+  const activeBucket = (activeSub?.limit.modelBuckets ?? [])
+    .filter(
+      (b) =>
+        b.modelIds.includes(activeModelObj.id) ||
+        (!b.modelIds.length && b.window === '7d' && new RegExp(b.label.split(' ')[0], 'i').test(activeModelObj.id))
+    )
+    .sort((a, b) => b.utilizationPct - a.utilizationPct)[0]
 
   const handleSend = async (): Promise<void> => {
     if (!text.trim() || isRunning) return
@@ -226,6 +240,15 @@ export function SubscriptionComposer({
     }
     setOpenMenu(null)
     textareaRef.current?.focus()
+  }
+
+  const filteredSkills = skills
+    .filter((k) => !skillQuery || k.name.toLowerCase().includes(skillQuery.toLowerCase()))
+    .slice(0, 30)
+
+  const pickSkill = (k: SkillInfo): void => {
+    if (/^\/[\w:.-]*$/.test(text)) setText('')
+    addMention({ type: 'skill', label: k.name, value: k.path })
   }
 
   const removeMention = (idx: number): void => {
@@ -335,7 +358,13 @@ export function SubscriptionComposer({
                 key={`${m.type}-${m.value}`}
                 className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.1] bg-white/[0.07] px-2 py-0.5 text-[12.5px] font-semibold text-zinc-100"
               >
-                {m.type === 'kb' ? <BookOpen size={12} className="text-indigo-400" /> : <FileText size={12} className="text-zinc-400" />}
+                {m.type === 'kb' ? (
+                  <BookOpen size={12} className="text-indigo-400" />
+                ) : m.type === 'skill' ? (
+                  <Wand2 size={12} className="text-amber-300" />
+                ) : (
+                  <FileText size={12} className="text-zinc-400" />
+                )}
                 <span>{m.label}</span>
                 <button
                   type="button"
@@ -354,8 +383,32 @@ export function SubscriptionComposer({
           ref={textareaRef}
           rows={Math.min(6, Math.max(2, text.split('\n').length))}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value
+            setText(v)
+            // `/name` at the start of the prompt opens the skill picker
+            const m = v.match(/^\/([\w:.-]*)$/)
+            if (m && skills.length) {
+              setSkillQuery(m[1])
+              if (openMenu !== 'skill') {
+                setMenuPos(calcFixedMenuPos(textareaRef.current, 360, 320))
+                setOpenMenu('skill')
+              }
+            } else if (openMenu === 'skill') setOpenMenu(null)
+          }}
           onKeyDown={(e) => {
+            if (openMenu === 'skill' && (e.key === 'Enter' || e.key === 'Tab')) {
+              const first = filteredSkills[0]
+              if (first) {
+                e.preventDefault()
+                pickSkill(first)
+                return
+              }
+            }
+            if (e.key === 'Escape' && openMenu) {
+              setOpenMenu(null)
+              return
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               handleSend()
@@ -462,7 +515,7 @@ export function SubscriptionComposer({
                       ? 'Add to task queue'
                       : 'Send to CLI'
                 }
-                className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-[#e89a6c] text-zinc-950 shadow-md transition-all hover:bg-[#f2a77b] disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-accent text-white shadow-[0_4px_14px_-2px_rgba(99,102,241,0.6)] transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <ArrowRight size={16} strokeWidth={2.2} />
               </button>
@@ -493,9 +546,9 @@ export function SubscriptionComposer({
                   'size-1.5 rounded-full',
                   !activeSub.authenticated
                     ? 'bg-zinc-600'
-                    : activeSub.limit.status === 'rejected'
+                    : (activeBucket?.status ?? activeSub.limit.status) === 'rejected'
                       ? 'bg-red-500'
-                      : activeSub.limit.status === 'warning'
+                      : (activeBucket?.status ?? activeSub.limit.status) === 'warning'
                         ? 'bg-amber-500'
                         : 'bg-emerald-400'
                 )}
@@ -503,7 +556,10 @@ export function SubscriptionComposer({
               <span>{activeSub.name}:</span>
               {activeSub.authenticated ? (
                 <span className="font-medium text-zinc-300">
-                  {activeSub.limit.utilizationPct}% (5h){activeSub.limit.weeklyUtilizationPct != null ? ` · ${activeSub.limit.weeklyUtilizationPct}% (7d)` : ''} · {activeSub.limit.resetInLabel}
+                  {activeBucket
+                    ? `${activeBucket.label}: ${100 - activeBucket.utilizationPct}% left${activeBucket.source === 'estimated' ? ' (est.)' : ''}`
+                    : `${activeSub.limit.utilizationPct}% (5h)${activeSub.limit.weeklyUtilizationPct != null ? ` · ${activeSub.limit.weeklyUtilizationPct}% (7d)` : ''}`}{' '}
+                  · {activeBucket?.resetInLabel ?? activeSub.limit.resetInLabel}
                 </span>
               ) : (
                 <button
@@ -534,10 +590,10 @@ export function SubscriptionComposer({
             maxHeight: menuPos.maxHeight,
             width: 520
           }}
-          className="z-[100] flex overflow-hidden rounded-2xl border border-white/[0.14] bg-[#16171d] shadow-[0_24px_60px_rgba(0,0,0,0.85)]"
+          className="glass-float pop-in z-[100] flex overflow-hidden rounded-2xl"
         >
           {/* Left Pane: AI Subscriptions List */}
-          <div className="flex w-[205px] shrink-0 flex-col justify-between border-r border-white/[0.08] bg-[#121318] p-2">
+          <div className="flex w-[205px] shrink-0 flex-col justify-between border-r border-white/[0.08] bg-black/20 p-2">
             <div className="space-y-1">
               <div className="flex items-center justify-between px-2 py-1">
                 <span className="text-[10.5px] font-semibold tracking-wider text-zinc-500 uppercase">Subscriptions</span>
@@ -700,7 +756,7 @@ export function SubscriptionComposer({
                       locked
                         ? 'cursor-not-allowed opacity-40'
                         : isSelected
-                          ? 'cursor-pointer bg-indigo-500/22 text-white'
+                          ? 'cursor-pointer bg-indigo-500/20 text-white'
                           : 'cursor-pointer text-zinc-200 hover:bg-white/[0.07]'
                     )}
                   >
@@ -718,6 +774,24 @@ export function SubscriptionComposer({
                         <p className="mt-0.5 truncate text-[11px] text-zinc-500">{m.description}</p>
                       )}
                     </div>
+                    {(() => {
+                      const tight = (previewSub.limit.modelBuckets ?? [])
+                        .filter((b) => b.modelIds.includes(m.id))
+                        .sort((a, b) => b.utilizationPct - a.utilizationPct)[0]
+                      if (!tight || locked) return null
+                      const left = 100 - tight.utilizationPct
+                      return (
+                        <span
+                          title={`${tight.label} · ${tight.resetInLabel}`}
+                          className={cx(
+                            'shrink-0 rounded-full px-1.5 py-0.2 font-mono text-[10px]',
+                            left <= 0 ? 'bg-red-500/20 text-red-300' : left <= 20 ? 'bg-amber-500/20 text-amber-300' : 'bg-white/[0.07] text-zinc-400'
+                          )}
+                        >
+                          {left}% left
+                        </span>
+                      )
+                    })()}
                     {isSelected && !locked && <Check size={14} className="shrink-0 text-indigo-400" />}
                   </button>
                 )
@@ -738,7 +812,7 @@ export function SubscriptionComposer({
             maxHeight: menuPos.maxHeight,
             width: 280
           }}
-          className="z-[100] overflow-y-auto rounded-xl border border-white/[0.14] bg-[#181920] p-2 shadow-2xl"
+          className="glass-float pop-in z-[100] overflow-y-auto rounded-xl p-2"
         >
           <div className="mb-1 flex items-center justify-between px-2 py-0.5">
             <span className="text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
@@ -794,7 +868,7 @@ export function SubscriptionComposer({
             maxHeight: menuPos.maxHeight,
             width: 260
           }}
-          className="z-[100] overflow-y-auto rounded-xl border border-white/[0.14] bg-[#181920] p-1.5 shadow-2xl"
+          className="glass-float pop-in z-[100] overflow-y-auto rounded-xl p-1.5"
         >
           <div className="px-2.5 py-1 text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">Projects</div>
           {projects
@@ -844,7 +918,7 @@ export function SubscriptionComposer({
             maxHeight: menuPos.maxHeight,
             width: 320
           }}
-          className="z-[100] overflow-y-auto rounded-xl border border-white/[0.14] bg-[#181920] p-2 shadow-2xl"
+          className="glass-float pop-in z-[100] overflow-y-auto rounded-xl p-2"
         >
           <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
             Reference Project or Knowledge Base
@@ -876,6 +950,35 @@ export function SubscriptionComposer({
             ))}
           </div>
 
+          {skills.length > 0 && (
+            <>
+              <div className="my-1.5 border-t border-white/[0.08]" />
+              <div className="eyebrow mb-1 flex items-center justify-between px-2">
+                <span>Skills</span>
+                <span className="font-normal tracking-normal text-zinc-500 normal-case">
+                  or type <span className="kbd">/</span>
+                </span>
+              </div>
+              <div className="max-h-32 space-y-0.5 overflow-y-auto">
+                {skills.slice(0, 40).map((k) => (
+                  <button
+                    key={`skill-${k.path}`}
+                    type="button"
+                    onClick={() => pickSkill(k)}
+                    title={k.description}
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-[12.5px] text-zinc-200 hover:bg-white/[0.07]"
+                  >
+                    <Wand2 size={12} className="shrink-0 text-amber-300" />
+                    <span className="truncate font-medium">{k.name}</span>
+                    {k.native.includes(selectedCli) && (
+                      <span className="ml-auto shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.2 text-[10px] text-emerald-300">native</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
           {projectFiles.length > 0 && (
             <>
               <div className="my-1.5 border-t border-white/[0.08]" />
@@ -906,6 +1009,44 @@ export function SubscriptionComposer({
         </div>
       )}
 
+      {/* Slash-command skill picker */}
+      {openMenu === 'skill' && (
+        <div
+          style={{ position: 'fixed', left: menuPos.left, top: menuPos.top, bottom: menuPos.bottom, maxHeight: menuPos.maxHeight, width: 360 }}
+          className="glass-float pop-in z-[100] overflow-y-auto rounded-xl p-1.5"
+        >
+          <div className="eyebrow flex items-center justify-between px-2.5 py-1">
+            <span>Skills</span>
+            <span className="font-normal tracking-normal text-zinc-500 normal-case">
+              <span className="kbd">Enter</span> to add
+            </span>
+          </div>
+          {filteredSkills.length === 0 ? (
+            <p className="muted px-2.5 py-2 text-[12px]">No skill matches "{skillQuery}".</p>
+          ) : (
+            filteredSkills.map((k, i) => (
+              <button
+                key={k.path}
+                type="button"
+                onClick={() => pickSkill(k)}
+                className={cx(
+                  'flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.07]',
+                  i === 0 && 'bg-white/[0.06]'
+                )}
+              >
+                <span className="flex w-full items-center gap-2 text-[13px] font-medium text-zinc-100">
+                  <Wand2 size={12} className="shrink-0 text-amber-300" />/{k.name}
+                  <span className="ml-auto text-[10px] font-normal text-zinc-500">
+                    {k.scope === 'project' ? 'project' : k.native.includes(selectedCli) ? 'native' : 'via SKILL.md'}
+                  </span>
+                </span>
+                {k.description && <span className="line-clamp-1 text-[11px] text-zinc-500">{k.description}</span>}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
       {/* 5. Permission Mode Popover */}
       {openMenu === 'mode' && (
         <div
@@ -917,7 +1058,7 @@ export function SubscriptionComposer({
             maxHeight: menuPos.maxHeight,
             width: 260
           }}
-          className="z-[100] overflow-y-auto rounded-xl border border-white/[0.14] bg-[#181920] p-1.5 shadow-2xl"
+          className="glass-float pop-in z-[100] overflow-y-auto rounded-xl p-1.5"
         >
           <div className="px-2.5 py-1 text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">Permission Mode</div>
           {PERMISSION_MODES.map((pm) => (
@@ -954,7 +1095,7 @@ export function SubscriptionComposer({
             maxHeight: menuPos.maxHeight,
             width: 290
           }}
-          className="z-[100] overflow-y-auto rounded-xl border border-white/[0.14] bg-[#181920] p-1.5 shadow-2xl"
+          className="glass-float pop-in z-[100] overflow-y-auto rounded-xl p-1.5"
         >
           <div className="px-2.5 py-1 text-[11px] font-semibold tracking-wider text-zinc-500 uppercase">Workspace Target</div>
           <button

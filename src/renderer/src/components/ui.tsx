@@ -29,8 +29,8 @@ export function Modal({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/65 p-6 pt-[8vh] backdrop-blur-md" onMouseDown={onClose}>
-      <div className={cx('card w-full border border-white/[0.12] bg-[#15161c]', width)} onMouseDown={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-6 pt-[8vh] backdrop-blur-sm" onMouseDown={onClose}>
+      <div className={cx('glass-float pop-in w-full rounded-2xl', width)} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-3.5">
           <h2 className="text-[15px] font-semibold text-white">{title}</h2>
           <button className="btn btn-ghost btn-icon -mr-2" onClick={onClose} aria-label="Close">
@@ -38,7 +38,7 @@ export function Modal({
           </button>
         </div>
         <div className="px-5 py-4">{children}</div>
-        {footer && <div className="flex items-center gap-2 rounded-b-xl border-t border-white/[0.08] bg-white/[0.02] px-5 py-3">{footer}</div>}
+        {footer && <div className="flex items-center gap-2 rounded-b-2xl border-t border-white/[0.08] bg-white/[0.02] px-5 py-3">{footer}</div>}
       </div>
     </div>
   )
