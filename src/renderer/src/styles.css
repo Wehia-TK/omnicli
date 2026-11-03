@@ -1,0 +1,156 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Inter Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Inter Variable', 'Segoe UI', system-ui, sans-serif;
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-zinc-950: #0a0b0e;
+  --color-zinc-900: #121318;
+  --color-zinc-800: #1c1e24;
+  --color-zinc-700: #2a2d36;
+  --color-zinc-600: #4b4e58;
+  --color-zinc-100: #ececef;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    @apply text-zinc-900 antialiased dark:text-zinc-100;
+    background-color: #0b0c10;
+    background-image:
+      radial-gradient(at 12% 8%, rgba(56, 189, 248, 0.08) 0px, transparent 48%),
+      radial-gradient(at 88% 12%, rgba(217, 119, 87, 0.08) 0px, transparent 46%),
+      radial-gradient(at 80% 88%, rgba(139, 92, 246, 0.08) 0px, transparent 50%),
+      linear-gradient(145deg, #0c0d12 0%, #08090c 55%, #0b0c11 100%);
+    font-size: 13.5px;
+    font-feature-settings: 'cv11', 'ss01';
+    letter-spacing: -0.004em;
+    user-select: none;
+  }
+  input,
+  textarea,
+  pre,
+  code,
+  [contenteditable],
+  .selectable {
+    user-select: text;
+  }
+  ::selection {
+    @apply bg-indigo-500/30;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-white/12 hover:bg-white/22;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-white/[0.08] bg-[#14151a]/90 backdrop-blur-xl;
+    box-shadow:
+      0 12px 32px -8px rgba(0, 0, 0, 0.5),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  }
+  .composer-box {
+    background-color: #1c1c1e;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow:
+      0 18px 42px -10px rgba(0, 0, 0, 0.65),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  }
+  .composer-box:focus-within {
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+  .btn {
+    @apply inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-white/[0.09] bg-white/[0.05] px-3 text-[12.5px] font-medium whitespace-nowrap text-zinc-100 transition-all hover:border-white/[0.16] hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-45;
+  }
+  .btn-primary {
+    @apply border-indigo-400/30 bg-indigo-600 text-white hover:bg-indigo-500;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:border-white/[0.07] hover:bg-white/[0.06];
+  }
+  .btn-danger {
+    @apply text-red-400 hover:border-red-400/25 hover:bg-red-500/15;
+  }
+  .btn-icon {
+    @apply w-8 px-0;
+  }
+  .input {
+    @apply h-9 w-full rounded-lg border border-white/[0.09] bg-black/35 px-3 text-[13px] text-zinc-100 transition-colors placeholder:text-zinc-500 focus:border-indigo-400/60 focus:bg-black/50 focus:outline-none;
+  }
+  textarea.input {
+    @apply h-auto py-2 leading-relaxed;
+  }
+  .muted {
+    @apply text-[#9195a0];
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium text-zinc-400;
+  }
+}
+
+/* CLI Avatars animations */
+.claude-avatar .claude-body {
+  animation: claude-bob 0.48s steps(1) infinite;
+}
+.claude-avatar .claude-leg-a {
+  animation: claude-step 0.48s steps(1) infinite;
+}
+.claude-avatar .claude-leg-b {
+  animation: claude-step 0.48s steps(1) -0.24s infinite;
+}
+.claude-avatar .claude-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cli-blink 3.2s steps(1) infinite;
+}
+.agy-avatar .agy-float {
+  animation: agy-float 2.4s ease-in-out infinite;
+}
+.agy-avatar .agy-orbit {
+  animation: agy-orbit 1.8s linear infinite;
+}
+.cli-shimmer {
+  background: linear-gradient(90deg, currentColor 35%, #ffffff 50%, currentColor 65%);
+  background-size: 300% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: cli-shimmer 2.4s linear infinite;
+}
+@keyframes claude-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+@keyframes claude-step {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+@keyframes cli-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  94% { transform: scaleY(0.1); }
+}
+@keyframes agy-float {
+  0%, 100% { transform: translateY(1px); }
+  50% { transform: translateY(-1.5px); }
+}
+@keyframes agy-orbit {
+  to { transform: rotate(360deg); }
+}
+@keyframes cli-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -50% 0; }
+}
