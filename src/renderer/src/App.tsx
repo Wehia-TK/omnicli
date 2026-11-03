@@ -94,7 +94,7 @@ export default function App(): React.JSX.Element {
     }
   }, [currentProject, selectedProjectId])
 
-  // Ensure selectedCli is an authenticated one if the current choice is unauthenticated
+  // Ensure selectedCli is an authenticated one if the current choice is unauthenticated, and ensure selectedModel is valid
   useEffect(() => {
     if (!clis?.length) return
     const cur = clis.find((c) => c.id === selectedCli)
@@ -104,8 +104,12 @@ export default function App(): React.JSX.Element {
         setSelectedCli(firstAuth.id)
         if (firstAuth.models[0]) setSelectedModel(firstAuth.models[0].id)
       }
+      return
     }
-  }, [clis, selectedCli])
+    if (cur && cur.models.length > 0 && !cur.models.some((m) => m.id === selectedModel)) {
+      setSelectedModel(cur.models[0].id)
+    }
+  }, [clis, selectedCli, selectedModel])
 
   const { data: tasks } = useData(
     () => (currentProject ? api.projects.tasks(currentProject.id) : Promise.resolve([])),

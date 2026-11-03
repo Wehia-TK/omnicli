@@ -106,6 +106,9 @@ const MIGRATIONS: string[] = [
     note TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL
   );
+  `,
+  `
+  UPDATE projects SET default_model = 'claude-opus-5-5' WHERE default_model IN ('sonnet', 'opus', 'haiku', 'claude-haiku-4-5-20251001');
   `
 ]
 
@@ -203,7 +206,7 @@ function seedInitialProjects(): void {
           'Personal Hub desktop app — tasks, leads, calendar, mail, deployments, and local offline SQLite storage.',
           'npm run typecheck && npm run build',
           'claude',
-          'sonnet',
+          'claude-opus-5-5',
           'default',
           'worktree',
           2,

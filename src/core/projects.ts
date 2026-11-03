@@ -186,10 +186,10 @@ function resolveModelFor(cli: CliId, t: ProjectTask, p: Project): string {
   const chosen = (t.model || p.default_model || '').trim()
   if (chosen && /^[\w.:[\]-]*$/.test(chosen)) return chosen
   if (cli === 'agy') return 'gemini-4-argon-high'
-  if (cli === 'claude') return 'sonnet'
-  if (cli === 'codex') return 'gpt-5-codex'
-  if (cli === 'gemini') return 'gemini-2.5-pro'
-  return 'claude-sonnet-4'
+  if (cli === 'claude') return 'claude-opus-5-5'
+  if (cli === 'codex') return 'gpt-5.2-codex'
+  if (cli === 'gemini') return 'gemini-4-argon'
+  return 'claude-sonnet-5-5'
 }
 
 function formatMentionsContext(mentionsRaw: string, projectFolder: string): string {
@@ -601,11 +601,13 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   const prompt = buildFullPrompt(cli, t, p, ask, cwd).slice(0, 24_000)
 
   let args: string[] = []
-  if (cli === 'agy' || (cli === 'gemini' && /agy\.exe$/i.test(exe))) {
-    const agyMode = t.permission_mode === 'plan' ? 'ask' : 'accept-edits'
-    args = ['-p', prompt, '--output-format', 'json', '--mode', agyMode, '--print-timeout', `${RUN_LIMIT_MS / 60_000}m`]
+  const isAgy = cli === 'agy' || (cli === 'gemini' && /agy\.exe$/i.test(exe))
+  if (isAgy) {
+    const agyMode = t.permission_mode === 'plan' ? 'plan' : t.permission_mode === 'bypass' ? 'auto' : 'accept-edits'
+    args = ['-p', prompt, '--output-format', 'stream-json', '--mode', agyMode, '--print-timeout', `${RUN_LIMIT_MS / 60_000}m`]
+    if (t.permission_mode === 'bypass') args.push('--dangerously-skip-permissions')
     if (t.agy_conversation) args.push('--conversation', t.agy_conversation)
-    if (model && model !== 'gemini-4-argon-high') args.push('--model', model)
+    if (model) args.push('--model', model)
   } else if (cli === 'codex') {
     args = ['exec', '--model', model, prompt]
   } else if (cli === 'gemini') {
@@ -634,18 +636,81 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   appendLog(t.id, 'info', `${cliDisplayName(cli)} (${model}) is working in ${t.checkout_mode === 'worktree' ? t.branch : 'local checkout'}`, cli, model)
 
   const startedAt = Date.now()
-  let out = ''
+  let buf = ''
+  let outText = ''
   let err = ''
   let timedOut = false
+  let streamTokens = 0
+  let streamOk = true
+
   const limitTimer = setTimeout(() => {
     timedOut = true
     killProcess(child)
   }, RUN_LIMIT_MS + 60_000)
 
+  const handleAgyLine = (raw: string): void => {
+    if (!raw.trim()) return
+    try {
+      const ev = JSON.parse(raw) as {
+        event?: string
+        conversation_id?: string
+        step_update?: {
+          conversation_id?: string
+          state?: string
+          step_type?: string
+          text_delta?: string
+          tool_name?: string
+          usage?: { total_tokens?: number }
+        }
+        result?: {
+          conversation_id?: string
+          status?: string
+          response?: string
+          usage?: { total_tokens?: number }
+        }
+      }
+      const cid = ev.conversation_id || ev.step_update?.conversation_id || ev.result?.conversation_id
+      if (cid) run('UPDATE project_tasks SET agy_conversation = ? WHERE id = ?', cid, t.id)
+
+      if (ev.event === 'step_update' && ev.step_update) {
+        const su = ev.step_update
+        if (su.text_delta) {
+          outText += su.text_delta
+          run('UPDATE project_tasks SET result = ? WHERE id = ?', outText, t.id)
+        }
+        if (su.tool_name && su.state === 'ACTIVE') {
+          appendLog(t.id, 'tool', su.tool_name, cli, model)
+        }
+        if (su.usage?.total_tokens) {
+          streamTokens = Math.max(streamTokens, su.usage.total_tokens)
+        }
+      }
+      if (ev.event === 'result' && ev.result) {
+        if (ev.result.response) outText = ev.result.response
+        streamOk = !ev.result.status || ev.result.status === 'SUCCESS'
+        if (ev.result.usage?.total_tokens) {
+          streamTokens = Math.max(streamTokens, ev.result.usage.total_tokens)
+        }
+      }
+      changedSoon()
+    } catch {
+      outText += raw + '\n'
+    }
+  }
+
   child.stdout?.setEncoding('utf8')
   child.stdout?.on('data', (d: string) => {
-    out += d
-    changedSoon()
+    if (!isAgy) {
+      outText += d
+      changedSoon()
+      return
+    }
+    buf += d
+    let nl: number
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      handleAgyLine(buf.slice(0, nl))
+      buf = buf.slice(nl + 1)
+    }
   })
 
   // Watch modified files in real-time so the stream UI shows live file edits as the CLI works
@@ -671,39 +736,39 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   child.on('close', (code) => {
     clearTimeout(limitTimer)
     clearInterval(fileWatcher)
+    if (isAgy && buf.trim()) handleAgyLine(buf)
     running.delete(t.id)
     const durationMs = Date.now() - startedAt
-    const estimatedTokens = Math.max(800, Math.round((prompt.length + out.length) / 3.5))
-    run('UPDATE project_tasks SET run_ms = run_ms + ?, tokens = tokens + ? WHERE id = ?', durationMs, estimatedTokens, t.id)
+    const finalTokens = streamTokens || Math.max(800, Math.round((prompt.length + outText.length) / 3.5))
+    run('UPDATE project_tasks SET run_ms = run_ms + ?, tokens = tokens + ? WHERE id = ?', durationMs, finalTokens, t.id)
 
     recordCliUsage({
       cli,
       model,
       projectId: p.id,
       taskId: t.id,
-      tokens: estimatedTokens,
+      tokens: finalTokens,
       durationMs
     })
 
     const freshProj = getProject(p.id)
-    const parsed = parseCliOutput(out)
-    if (parsed.conversation) {
-      run('UPDATE project_tasks SET agy_conversation = ? WHERE id = ?', parsed.conversation, t.id)
-    }
+    const finalAnswer = outText.trim()
 
     if (getTask(t.id).run_state !== 'running') {
       // stopped by user
-    } else if (timedOut || code !== 0 || !parsed.ok || turnedDownByLimit(false, parsed.text || err)) {
-      if (turnedDownByLimit(false, parsed.text || err)) {
+    } else if (timedOut || code !== 0 || !streamOk || turnedDownByLimit(false, finalAnswer || err)) {
+      if (turnedDownByLimit(false, finalAnswer || err)) {
         recordCliRateEvent(cli, 'rejected', 100, null, 'Subscription quota limit reached')
       }
       const why = timedOut
         ? `Stopped after ${RUN_LIMIT_MS / 60_000} minutes.`
-        : (err.trim().split('\n').slice(-3).join(' ') || parsed.text || `Stopped (exit ${code})`).slice(0, 1000)
+        : (err.trim().split('\n').slice(-3).join(' ') || finalAnswer || `Stopped (exit ${code})`).slice(0, 1000)
       handleStoppedRun(cli, getTask(t.id), freshProj, ask, why, firstWhy)
     } else {
-      appendLog(t.id, 'text', parsed.text, cli, model)
-      run('UPDATE project_tasks SET result = ? WHERE id = ?', parsed.text, t.id)
+      if (finalAnswer) {
+        appendLog(t.id, 'text', finalAnswer, cli, model)
+        run('UPDATE project_tasks SET result = ? WHERE id = ?', finalAnswer, t.id)
+      }
       commitWorktreeEditsIfNeeded(getTask(t.id), cliDisplayName(cli))
       if (freshProj.check_cmd.trim() && getTask(t.id).kind === 'task') {
         runChecks(getTask(t.id), freshProj, cli, model)

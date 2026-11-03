@@ -198,17 +198,37 @@ export function LiveLimitsModal({
                 )}
 
                 {sub.authenticated ? (
-                  <div className="mt-3 space-y-1.5 rounded-lg border border-white/[0.06] bg-black/30 p-2.5">
-                    <div className="flex items-center justify-between text-[12px]">
-                      <span className="font-medium text-zinc-200">5-Hour Rolling Window: {pct}%</span>
-                      <span className="text-zinc-400">{sub.limit.resetInLabel}</span>
+                  <div className="mt-3 space-y-2 rounded-lg border border-white/[0.06] bg-black/30 p-2.5">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[12px]">
+                        <span className="font-medium text-zinc-200">5-Hour Session Window: {pct}%</span>
+                        <span className="text-zinc-400">{sub.limit.resetInLabel}</span>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.08]">
+                        <div className={cx('h-full rounded-full transition-all', barClass)} style={{ width: `${Math.max(3, pct)}%` }} />
+                      </div>
                     </div>
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.08]">
-                      <div className={cx('h-full rounded-full transition-all', barClass)} style={{ width: `${Math.max(3, pct)}%` }} />
-                    </div>
+
+                    {sub.limit.weeklyUtilizationPct !== undefined && (
+                      <div className="space-y-1 pt-0.5">
+                        <div className="flex items-center justify-between text-[11.5px]">
+                          <span className="font-medium text-zinc-300">
+                            7-Day Weekly Window: {sub.limit.weeklyUtilizationPct}%
+                          </span>
+                          <span className="text-zinc-500">{sub.limit.weeklyResetInLabel}</span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                          <div
+                            className="h-full rounded-full bg-indigo-500 transition-all"
+                            style={{ width: `${Math.max(2, sub.limit.weeklyUtilizationPct)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-zinc-400">
                       <span>
-                        5h: {fmtTokens(sub.limit.usedTokens)} / {fmtTokens(sub.limit.maxTokensWindow)} tokens ({sub.limit.usedRequests} runs)
+                        5h activity: {fmtTokens(sub.limit.usedTokens)} tokens · {sub.limit.usedRequests} turns
                       </span>
                       <span>24h: {fmtTokens(sub.limit.todayTokens)} tokens</span>
                     </div>

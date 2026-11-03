@@ -26,6 +26,8 @@ export interface CliLimitInfo {
   maxRequestsWindow: number
   maxTokensWindow: number
   utilizationPct: number
+  weeklyUtilizationPct?: number
+  weeklyResetInLabel?: string
   status: 'ok' | 'warning' | 'rejected' | 'unauthenticated'
   resetsAt: string | null
   resetInLabel: string
