@@ -16,13 +16,14 @@
 
 ## ⚡ Overview
 
-**Omni CLI** is a modern, borderless desktop dashboard designed to orchestrate and manage multiple AI coding CLIs (**Claude Code**, **Google Antigravity**, **OpenAI Codex**, and **GitHub Copilot**) in one unified place.
+**Omni CLI** is a modern, borderless desktop dashboard designed to orchestrate and manage multiple AI coding CLIs (**Claude Code**, **Google Antigravity**, **OpenAI Codex**, and **GitHub Copilot**) in one unified place across **Windows** and **macOS** (Apple Silicon & Intel).
 
 Instead of wrestling with scattered terminals, hidden rate limits, and disjointed context between different AI tools, Omni CLI provides:
 - **Real-time subscription & quota tracking** (5-hour rolling windows, weekly quotas, and model buckets).
 - **A shared, persistent Knowledge Base (`.ai-kb/PROJECT_KNOWLEDGE.md`)** that keeps all AI agents aligned.
 - **Isolated Git worktree execution** so multiple AI agents can work in parallel on the same repository without collisions.
-- **Embedded interactive PTY terminals** with live model and effort level selectors.
+- **Embedded interactive PTY terminals** (PowerShell on Windows, Zsh/Bash on macOS) with live model and effort level selectors.
+- **Cross-platform desktop design** with platform-native titlebars (macOS traffic lights via `hiddenInset` and custom frameless controls on Windows).
 
 ---
 
@@ -96,6 +97,7 @@ Omni CLI (Electron App)
 
 ### Prerequisites
 
+- **Operating System**: Windows 10/11 or macOS 12+ (Apple Silicon M-Series & Intel)
 - **Node.js**: `v20.x` or later (LTS recommended)
 - **npm** or compatible package manager
 - **Git**: Installed and available in your system `PATH`
@@ -127,7 +129,8 @@ Omni CLI (Electron App)
 | `npm run dev` | Starts the app in development mode with hot reload (`electron-vite dev`). |
 | `npm run build` | Compiles the main process, preload scripts, and renderer bundle. |
 | `npm run typecheck` | Validates TypeScript types across the entire project (`tsc --noEmit`). |
-| `npm run dist` | Builds production assets and packages a Windows installer via `electron-builder`. |
+| `npm run dist` | Builds production assets and packages a Windows installer (`.exe`) via `electron-builder`. |
+| `npm run dist:mac` | Builds production assets and packages macOS bundles (`.dmg` & `.zip`) via `electron-builder`. |
 
 > [!IMPORTANT]
 > **Verification Convention**: Always run `npm run typecheck && npm run build` before committing changes to ensure type safety and build integrity.
