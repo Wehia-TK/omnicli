@@ -19,6 +19,7 @@ import type {
   Project,
   ProjectTask,
   ProjectTaskStatus,
+  QueuedMessage,
   Settings,
   SkillInfo,
   TaskChanges,
@@ -186,6 +187,18 @@ export const api = {
       text: string,
       opts?: { cli?: CliId; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode; mentions?: MentionItem[] }
     ) => call<ProjectTask>('projects.reply', id, text, opts),
+    queueMessage: (
+      taskId: number,
+      prompt: string,
+      opts?: { mentions?: MentionItem[]; cli?: CliId; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode }
+    ) => call<QueuedMessage>('projects.queueMessage', taskId, prompt, opts),
+    listQueuedMessages: (taskId: number) => call<QueuedMessage[]>('projects.listQueuedMessages', taskId),
+    removeQueuedMessage: (id: number) => call<true>('projects.removeQueuedMessage', id),
+    sendNow: (
+      taskId: number,
+      promptOrQueuedId?: string | number,
+      opts?: { mentions?: MentionItem[]; cli?: CliId; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode }
+    ) => call<ProjectTask>('projects.sendNow', taskId, promptOrQueuedId, opts),
     stop: (id: number) => call<ProjectTask>('projects.stop', id),
     check: (id: number) => call<ProjectTask>('projects.check', id),
     log: (id: number) => call<LogLine[]>('projects.log', id),

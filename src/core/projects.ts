@@ -1,10 +1,11 @@
 import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import type { CheckoutMode, CliId, EffortLevel, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, TaskChanges } from '@shared/types'
+import type { CheckoutMode, CliId, EffortLevel, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, QueuedMessage, TaskChanges } from '@shared/types'
 import {
   agyConversationTokens,
   agyDeniedActions,
+  agyThinkingSteps,
   agyModelExhausted,
   agyModelFamily,
   pickAgyAlternative,
@@ -341,12 +342,19 @@ export function buildFullPrompt(cli: CliId, t: ProjectTask, p: Project, ask: str
 function buildPromptBody(cli: CliId, t: ProjectTask, p: Project, ask: string, cwd: string): string {
   const kbBlock = buildKnowledgePrompt(p.id, cwd)
   const mentionsBlock = formatMentionsContext(t.mentions, p.folder, cli)
-  const modeNote =
+  const intentNote =
+    'INTENT ROUTING (DECIDE TO BUILD VS. JUST ANSWER):\n' +
+    '- If the user asks an informational, architectural, or conceptual question, asks for an explanation (e.g. "how does this work?", "would this app work on mac?", "what is X?"), or asks a simple question without explicitly requesting code changes: JUST ANSWER DIRECTLY AND CONCISELY. Do not touch or modify any files, do not create git branches/worktrees, and do not execute build/test commands.\n' +
+    '- Only modify files, write code, or execute build/verification checks when the user is explicitly requesting code changes, implementation, bug fixes, refactoring, or file modifications.'
+
+  const modeNote = [
     t.permission_mode === 'plan'
       ? 'PERMISSION MODE: Plan Only. Analyze, design, and explain your step-by-step plan without modifying files until approved.'
       : t.checkout_mode === 'worktree'
         ? `WORKING MODE: You are working in an isolated git worktree on branch ${t.branch || 'worktree'}. Make sensible choices, edit files as needed, and end with a concise summary.`
-        : `WORKING MODE: You are working directly in the local checkout (${cwd}). Make clean, careful changes and end with a concise summary.`
+        : `WORKING MODE: You are working directly in the local checkout (${cwd}). Make clean, careful changes and end with a concise summary.`,
+    intentNote
+  ].join('\n\n')
 
   const lastRunner = t.runner
   // If continuing the exact same CLI conversation, keep the prompt concise
@@ -448,6 +456,33 @@ function finishRun(t: ProjectTask, p: Project, cli: CliId, model: string): void 
   )
   if (t.kind === 'task' || !p.auto_run) phoneNotify(`${p.name}: ${cliDisplayName(cli)} finished`, `${t.title}${checked}`)
   if (getSettings().useGraphify && getSettings().graphifyWatch && p.folder) updateGraphNow(p.folder)
+
+  const nextMsg = get<QueuedMessage>('SELECT * FROM queued_messages WHERE task_id = ? ORDER BY id ASC LIMIT 1', t.id)
+  if (nextMsg) {
+    run('DELETE FROM queued_messages WHERE id = ?', nextMsg.id)
+    notifier.changed()
+    let mentions: MentionItem[] = []
+    try {
+      mentions = JSON.parse(nextMsg.mentions || '[]') as MentionItem[]
+    } catch {
+      // ignore
+    }
+    setTimeout(() => {
+      try {
+        projects.reply(t.id, nextMsg.prompt, {
+          cli: (nextMsg.cli || t.cli || undefined) as CliId | undefined,
+          model: nextMsg.model || t.model,
+          effort: nextMsg.effort || t.effort,
+          permissionMode: nextMsg.permission_mode || t.permission_mode,
+          mentions
+        })
+      } catch (err) {
+        console.error('Failed to dispatch queued message:', err)
+      }
+    }, 150)
+    return
+  }
+
   nextInQueue(p.id)
 }
 
@@ -475,6 +510,7 @@ function runChecks(t: ProjectTask, p: Project, cli: CliId, model: string): void 
   child.on('error', (e) => (out += e.message))
   child.on('close', (code) => {
     clearTimeout(limit)
+    if (running.get(t.id) !== child) return // superseded by Send now
     running.delete(t.id)
     if (getTask(t.id).run_state !== 'running') return
     const tail = out.replace(/\x1b\[[0-9;]*m/g, '').trim().slice(-3000) || `(no output; exit code ${code})`
@@ -686,7 +722,8 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
   child.on('close', (code) => {
     clearTimeout(limitTimer)
     handleJsonLine(buf)
-    running.delete(t.id)
+    const superseded = running.get(t.id) !== child
+    if (!superseded) running.delete(t.id)
     tickTime()
 
     const durationMs = Date.now() - startedAt
@@ -702,8 +739,8 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
 
     const cur = getTask(t.id)
     const r = resultObj as { text: string; isError: boolean } | null
-    if (cur.run_state !== 'running') {
-      // manually stopped
+    if (superseded || cur.run_state !== 'running') {
+      // manually stopped or interrupted by Send now
     } else if (r && !r.isError && !timedOut && !rateRejected) {
       if (r.text) run('UPDATE project_tasks SET result = ? WHERE id = ?', r.text, t.id)
       const freshProj = getProject(p.id)
@@ -799,9 +836,9 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   let stdinPrompt: string | null = null
   const isAgy = cli === 'agy'
   if (isAgy) {
-    const agyMode = t.permission_mode === 'plan' ? 'plan' : t.permission_mode === 'bypass' ? 'auto' : 'accept-edits'
+    const agyMode = t.permission_mode === 'plan' ? 'plan' : 'auto'
     args = ['-p', prompt.slice(0, 24_000), '--output-format', 'stream-json', '--mode', agyMode, '--print-timeout', `${RUN_LIMIT_MS / 60_000}m`]
-    if (t.permission_mode === 'bypass') args.push('--dangerously-skip-permissions')
+    if (t.permission_mode !== 'plan') args.push('--dangerously-skip-permissions')
     if (t.agy_conversation && t.runner === 'agy') args.push('--conversation', t.agy_conversation)
     if (model) args.push('--model', model)
   } else if (cli === 'codex') {
@@ -860,6 +897,20 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     killProcess(child)
   }, RUN_LIMIT_MS + 60_000)
 
+  let agyCid = t.agy_conversation || ''
+  const seenThinkingSteps = new Set<number>()
+  const syncAgyThinking = (): void => {
+    if (!agyCid) return
+    const steps = agyThinkingSteps(agyCid, startedAt)
+    for (const step of steps) {
+      if (!seenThinkingSteps.has(step.stepIndex)) {
+        seenThinkingSteps.add(step.stepIndex)
+        appendLog(t.id, 'thinking', step.thinking, cli, model)
+      }
+    }
+  }
+  const agyThinkingTimer = isAgy ? setInterval(syncAgyThinking, 1000) : null
+
   const handleAgyLine = (raw: string): void => {
     if (!raw.trim()) return
     try {
@@ -878,7 +929,11 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
         result?: { conversation_id?: string; status?: string; response?: string; error?: string; usage?: { total_tokens?: number } }
       }
       const cid = ev.conversation_id || ev.step_update?.conversation_id || ev.result?.conversation_id
-      if (cid) run('UPDATE project_tasks SET agy_conversation = ? WHERE id = ?', cid, t.id)
+      if (cid) {
+        agyCid = cid
+        run('UPDATE project_tasks SET agy_conversation = ? WHERE id = ?', cid, t.id)
+        syncAgyThinking()
+      }
       if (ev.error) errorText += typeof ev.error === 'string' ? ev.error : (ev.error.message ?? '')
 
       if (ev.event === 'step_update' && ev.step_update) {
@@ -982,8 +1037,11 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   child.on('close', (code) => {
     clearTimeout(limitTimer)
     if (fileWatcher) clearInterval(fileWatcher)
+    if (agyThinkingTimer) clearInterval(agyThinkingTimer)
+    if (isAgy) syncAgyThinking()
     if (lineHandler && buf.trim()) lineHandler(buf)
-    running.delete(t.id)
+    const superseded = running.get(t.id) !== child
+    if (!superseded) running.delete(t.id)
     const durationMs = Date.now() - startedAt
 
     const tid = getTask(t.id)
@@ -997,8 +1055,8 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     const failureText = `${errorText}\n${err}`
     const failed = timedOut || code !== 0 || !streamOk
 
-    if (getTask(t.id).run_state !== 'running') {
-      // stopped by user
+    if (superseded || getTask(t.id).run_state !== 'running') {
+      // stopped by user or interrupted by Send now
     } else if (isAgy && !failed && tid.agy_conversation && tid.permission_mode !== 'bypass' && agyDeniedActions(tid.agy_conversation, startedAt).length) {
       // Antigravity's print mode can't show a permission prompt — it silently denies and ends the turn. Say so.
       const denied = agyDeniedActions(tid.agy_conversation, startedAt)
@@ -1487,6 +1545,97 @@ export const projects = {
     appendLog(id, 'you', text.trim(), cli, `${model} (${effort})`)
     executeWithCli(cli, updated, p, text.trim())
     return getTask(id)
+  },
+
+  /** Queue a message to run once the current turn finishes. */
+  queueMessage: (
+    taskId: number,
+    prompt: string,
+    opts?: { mentions?: MentionItem[]; cli?: CliId; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode }
+  ): QueuedMessage => {
+    if (!prompt.trim()) throw new Error('Write a message first')
+    const created = nowLocal()
+    const r = run(
+      `INSERT INTO queued_messages (task_id, prompt, mentions, cli, model, effort, permission_mode, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      taskId,
+      prompt.trim(),
+      JSON.stringify(opts?.mentions ?? []),
+      opts?.cli ?? null,
+      opts?.model ?? null,
+      opts?.effort ?? null,
+      opts?.permissionMode ?? null,
+      created
+    )
+    notifyChanged()
+    return get<QueuedMessage>('SELECT * FROM queued_messages WHERE id = ?', r)!
+  },
+
+  listQueuedMessages: (taskId: number): QueuedMessage[] =>
+    all<QueuedMessage>('SELECT * FROM queued_messages WHERE task_id = ? ORDER BY id ASC', taskId),
+
+  removeQueuedMessage: (id: number): boolean => {
+    run('DELETE FROM queued_messages WHERE id = ?', id)
+    notifyChanged()
+    return true
+  },
+
+  /** Interrupt any active run and immediately execute a prompt or a specific queued message. */
+  sendNow: (
+    taskId: number,
+    promptOrQueuedId?: string | number,
+    opts?: { mentions?: MentionItem[]; cli?: CliId; model?: string; effort?: EffortLevel; permissionMode?: PermissionMode }
+  ): ProjectTask => {
+    let prompt = ''
+    let options = opts
+    if (typeof promptOrQueuedId === 'number') {
+      const qm = get<QueuedMessage>('SELECT * FROM queued_messages WHERE id = ?', promptOrQueuedId)
+      if (qm) {
+        prompt = qm.prompt
+        run('DELETE FROM queued_messages WHERE id = ?', qm.id)
+        let mentions: MentionItem[] = []
+        try { mentions = JSON.parse(qm.mentions || '[]') as MentionItem[] } catch {}
+        options = {
+          cli: qm.cli,
+          model: qm.model,
+          effort: qm.effort,
+          permissionMode: qm.permission_mode,
+          mentions,
+          ...opts
+        }
+      }
+    } else if (typeof promptOrQueuedId === 'string' && promptOrQueuedId.trim()) {
+      prompt = promptOrQueuedId.trim()
+    }
+
+    if (running.has(taskId)) {
+      const child = running.get(taskId)
+      if (child) killProcess(child)
+      running.delete(taskId)
+      run("UPDATE project_tasks SET run_state = '' WHERE id = ?", taskId)
+    }
+
+    if (!prompt) {
+      const nextMsg = get<QueuedMessage>('SELECT * FROM queued_messages WHERE task_id = ? ORDER BY id ASC LIMIT 1', taskId)
+      if (nextMsg) {
+        prompt = nextMsg.prompt
+        run('DELETE FROM queued_messages WHERE id = ?', nextMsg.id)
+        let mentions: MentionItem[] = []
+        try { mentions = JSON.parse(nextMsg.mentions || '[]') as MentionItem[] } catch {}
+        options = {
+          cli: nextMsg.cli,
+          model: nextMsg.model,
+          effort: nextMsg.effort,
+          permissionMode: nextMsg.permission_mode,
+          mentions,
+          ...opts
+        }
+      }
+    }
+
+    if (!prompt) throw new Error('No message to send')
+    notifyChanged()
+    return projects.reply(taskId, prompt, options)
   },
 
   stop: (id: number): ProjectTask => {

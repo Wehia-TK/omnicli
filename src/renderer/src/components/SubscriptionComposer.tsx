@@ -18,7 +18,9 @@ import {
   Crosshair,
   Terminal,
   Wand2,
-  X
+  X,
+  ListPlus,
+  Zap
 } from 'lucide-react'
 import type {
   CheckoutMode,
@@ -70,6 +72,8 @@ interface SubscriptionComposerProps {
   submitMode?: 'thread' | 'task'
   onChangeSubmitMode?: (m: 'thread' | 'task') => void
   onSubmit: (prompt: string, mentions: MentionItem[], mode: 'thread' | 'task') => Promise<void>
+  onSendNow?: (prompt: string, mentions: MentionItem[]) => Promise<void>
+  onQueueMessage?: (prompt: string, mentions: MentionItem[]) => Promise<void>
   /** Live token estimate for what Send will transmit */
   estimateTaskId?: number | null
   /** Optional second AI to run the same prompt against (compare mode) */
@@ -157,6 +161,8 @@ export function SubscriptionComposer({
   submitMode = 'thread',
   onChangeSubmitMode,
   onSubmit,
+  onSendNow,
+  onQueueMessage,
   estimateTaskId,
   compareWith,
   onChangeCompareWith
@@ -301,6 +307,32 @@ export function SubscriptionComposer({
     setText('')
     setMentions([])
     await onSubmit(payload, attached, submitMode)
+  }
+
+  const handleQueueMessage = async (): Promise<void> => {
+    if (!text.trim()) return
+    const payload = text
+    const attached = [...mentions]
+    setText('')
+    setMentions([])
+    if (onQueueMessage) {
+      await onQueueMessage(payload, attached)
+    } else {
+      await onSubmit(payload, attached, 'task')
+    }
+  }
+
+  const handleSendNow = async (): Promise<void> => {
+    if (!text.trim()) return
+    const payload = text
+    const attached = [...mentions]
+    setText('')
+    setMentions([])
+    if (onSendNow) {
+      await onSendNow(payload, attached)
+    } else {
+      await onSubmit(payload, attached, 'thread')
+    }
   }
 
   const addMention = (item: MentionItem): void => {
@@ -502,7 +534,11 @@ export function SubscriptionComposer({
             }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              handleSend()
+              if (isRunning) {
+                if (text.trim()) handleQueueMessage()
+              } else {
+                handleSend()
+              }
             }
           }}
           onPaste={(e) => {
@@ -606,14 +642,36 @@ export function SubscriptionComposer({
             </button>
 
             {isRunning ? (
-              <button
-                type="button"
-                onClick={onStop}
-                title="Stop current CLI run"
-                className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-red-500/90 text-white shadow-md transition-transform hover:scale-105 hover:bg-red-500"
-              >
-                <Square size={13} fill="currentColor" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                {text.trim() && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleQueueMessage}
+                      title="Queue message to run when the current turn finishes (Enter)"
+                      className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-indigo-400/35 bg-indigo-500/15 px-2.5 text-[12px] font-medium text-indigo-200 transition-colors hover:bg-indigo-500/25"
+                    >
+                      <ListPlus size={13} /> Queue
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSendNow}
+                      title="Interrupt and send message immediately"
+                      className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-indigo-600 px-3 text-[12px] font-semibold text-white shadow-md transition-all hover:brightness-110 active:scale-95"
+                    >
+                      <Zap size={13} fill="currentColor" /> Send Now
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={onStop}
+                  title="Stop current CLI run"
+                  className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-red-500/90 text-white shadow-md transition-transform hover:scale-105 hover:bg-red-500"
+                >
+                  <Square size={13} fill="currentColor" />
+                </button>
+              </div>
             ) : (
               <button
                 type="button"

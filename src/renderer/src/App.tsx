@@ -19,7 +19,6 @@ import {
   MessageSquarePlus,
   Pause,
   Pencil,
-  Play,
   Plus,
   RotateCcw,
   Settings as SettingsIcon,
@@ -28,7 +27,11 @@ import {
   Sparkles,
   SquareTerminal,
   Terminal,
-  Trash2
+  Trash2,
+  X,
+  Brain,
+  Zap,
+  ListPlus
 } from 'lucide-react'
 import type {
   CheckoutMode,
@@ -53,7 +56,7 @@ import { WindowControls } from './components/WindowControls'
 import appLogo from './assets/logo.png'
 import { LiveLimitsModal, SubscriptionStatusStrip } from './components/LiveLimitsModal'
 import { SubscriptionComposer } from './components/SubscriptionComposer'
-import { confirmAction, cx, Field, Modal } from './components/ui'
+import { confirmAction, cx, Field, Modal, Skeleton, SkeletonCard } from './components/ui'
 import { act, api, toast, useData, useToasts } from './lib/api'
 import { relative } from './lib/dates'
 import { Markdown } from './lib/markdown'
@@ -393,8 +396,16 @@ export default function App(): React.JSX.Element {
               </button>
             </div>
 
-            <div className="space-y-0.5">
-              {[...openProjects, ...archivedProjects].map((p) => {
+            <div className="space-y-1">
+              {!projectsList ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="flex h-7 items-center gap-2 rounded-lg px-2 animate-pulse bg-white/[0.03]">
+                    <div className="size-3.5 rounded bg-white/[0.08]" />
+                    <div className="h-2.5 rounded bg-white/[0.08]" style={{ width: `${60 + i * 15}%` }} />
+                  </div>
+                ))
+              ) : (
+                [...openProjects, ...archivedProjects].map((p) => {
                 const isSelected = p.id === currentProject?.id
                 return (
                   <div
@@ -427,7 +438,7 @@ export default function App(): React.JSX.Element {
                     </button>
                   </div>
                 )
-              })}
+              }))}
             </div>
           </div>
 
@@ -457,7 +468,14 @@ export default function App(): React.JSX.Element {
             </div>
 
             <div className="flex-1 space-y-0.5 overflow-y-auto pr-0.5">
-              {threads.length === 0 ? (
+              {!tasks ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex h-7 items-center gap-2 rounded-lg px-2 animate-pulse bg-white/[0.03]">
+                    <div className="size-3 rounded-full bg-white/[0.08]" />
+                    <div className="h-2.5 rounded bg-white/[0.08]" style={{ width: `${50 + (i % 2) * 25}%` }} />
+                  </div>
+                ))
+              ) : threads.length === 0 ? (
                 <p className="px-2 py-4 text-[12px] text-zinc-500">
                   No sessions yet. Start one with the composer to stream live from Claude, Antigravity, Codex, or Copilot.
                 </p>
@@ -758,6 +776,30 @@ export default function App(): React.JSX.Element {
                           onStop={() => act(api.projects.stop(activeTask.id), 'Stopped')}
                           placeholder={`Reply to ${clis?.find((c) => c.id === selectedCli)?.shortName ?? selectedCli} · ${selectedModelObj?.name ?? selectedModel} · ${effectiveEffort} effort — type / for skills`}
                           onSubmit={handleComposerSubmit}
+                          onQueueMessage={async (prompt, mentions) => {
+                            await act(
+                              api.projects.queueMessage(activeTask.id, prompt, {
+                                cli: selectedCli,
+                                model: selectedModel,
+                                effort: effectiveEffort,
+                                permissionMode,
+                                mentions
+                              }),
+                              'Message queued for next turn'
+                            )
+                          }}
+                          onSendNow={async (prompt, mentions) => {
+                            await act(
+                              api.projects.sendNow(activeTask.id, prompt, {
+                                cli: selectedCli,
+                                model: selectedModel,
+                                effort: effectiveEffort,
+                                permissionMode,
+                                mentions
+                              }),
+                              'Sent immediately'
+                            )
+                          }}
                         />
                       </div>
                     </div>
@@ -834,7 +876,15 @@ export default function App(): React.JSX.Element {
             {activeTab === 'kb' && currentProject && (
               <div className="flex-1 overflow-y-auto px-6 py-5">
                 <div className="mx-auto max-w-[960px]">
-                  <KnowledgeBaseView project={currentProject} entries={kbEntries ?? []} />
+                  {kbEntries === undefined ? (
+                    <div className="space-y-3">
+                      <SkeletonCard lines={2} />
+                      <SkeletonCard lines={3} />
+                      <SkeletonCard lines={2} />
+                    </div>
+                  ) : (
+                    <KnowledgeBaseView project={currentProject} entries={kbEntries} />
+                  )}
                 </div>
               </div>
             )}
@@ -940,6 +990,7 @@ function ActiveSessionStream({
     [t.id, selectedFile],
     { throttleMs: 2500 }
   )
+  const { data: queuedMsgs } = useData(() => api.projects.listQueuedMessages(t.id), [t.id, t.run_state])
   const bottomRef = useRef<HTMLDivElement>(null)
   const busy = t.run_state === 'running'
   const activeCli = (t.runner || t.cli || 'agy') as CliId
@@ -1073,6 +1124,13 @@ function ActiveSessionStream({
       {/* Stream Content vs Git Changes Content */}
       {subTab === 'stream' ? (
         <div className="space-y-2.5">
+          {logs === undefined && (
+            <>
+              <Skeleton className="ml-auto h-12 w-[55%] rounded-2xl" />
+              <SkeletonCard lines={4} />
+              <SkeletonCard lines={2} />
+            </>
+          )}
           {(logs ?? []).map((l, i) => {
             if (l.kind === 'you') {
               return (
@@ -1100,9 +1158,23 @@ function ActiveSessionStream({
 
             if (l.kind === 'thinking') {
               return (
-                <details key={i} className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-400">
-                  <summary className="cursor-pointer font-medium text-zinc-400">Reasoning / Thinking step</summary>
-                  <pre className="mt-1.5 whitespace-pre-wrap font-sans text-[12px] text-zinc-400">{l.text}</pre>
+                <details
+                  key={i}
+                  open
+                  className="group rounded-xl border border-indigo-500/25 bg-indigo-950/20 px-3.5 py-2.5 text-[12px] transition-all"
+                >
+                  <summary className="flex cursor-pointer items-center justify-between font-medium text-indigo-300 select-none">
+                    <span className="flex items-center gap-2">
+                      <Brain size={14} className={cx('text-indigo-400', busy && 'animate-pulse')} />
+                      <span>{busy ? 'Model Thinking Live…' : 'Complete Thinking Process'}</span>
+                    </span>
+                    <span className="rounded bg-white/[0.06] px-1.5 py-0.2 text-[10px] text-zinc-400">
+                      {l.model || 'Reasoning'}
+                    </span>
+                  </summary>
+                  <div className="mt-2.5 max-h-96 overflow-y-auto rounded-lg bg-black/45 p-3 font-mono text-[11.5px] leading-relaxed text-zinc-300 whitespace-pre-wrap selection:bg-indigo-500/30">
+                    {l.text}
+                  </div>
                 </details>
               )
             }
@@ -1199,12 +1271,58 @@ function ActiveSessionStream({
             </div>
           )}
 
+          {queuedMsgs && queuedMsgs.length > 0 && (
+            <div className="card space-y-2 border-indigo-500/35 bg-indigo-500/[0.06] p-3">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[12px] font-semibold text-indigo-300">
+                  <ListPlus size={13} /> Queued Messages ({queuedMsgs.length})
+                </span>
+                <span className="text-[11px] text-zinc-400">Runs automatically after current turn</span>
+              </div>
+              <div className="divide-y divide-white/[0.06]">
+                {queuedMsgs.map((qm) => (
+                  <div key={qm.id} className="flex items-center justify-between gap-3 py-2 text-[12.5px]">
+                    <div className="min-w-0 flex-1 truncate text-zinc-200">
+                      <span className="mr-2 font-mono text-[11px] text-zinc-500">#{qm.id}</span>
+                      {qm.prompt}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => act(api.projects.sendNow(t.id, qm.id), 'Sent immediately')}
+                        className="inline-flex h-6.5 cursor-pointer items-center gap-1 rounded bg-indigo-500 px-2.5 text-[11px] font-semibold text-white transition-colors hover:bg-indigo-600"
+                        title="Interrupt current run and send this message right now"
+                      >
+                        <Zap size={11} fill="currentColor" /> Send now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => act(api.projects.removeQueuedMessage(qm.id))}
+                        className="btn btn-ghost btn-icon h-6.5 w-6.5 text-zinc-400 hover:text-white"
+                        title="Remove from queue"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div ref={bottomRef} />
         </div>
       ) : (
         /* Git Changes & Diff Viewer */
         <div className="card space-y-4 p-4">
-          {!changes ? (
+          {changes === undefined ? (
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-1/3" />
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-7 w-full" />
+              ))}
+            </div>
+          ) : !changes ? (
             <p className="muted text-[13px]">No git repository detected in this folder.</p>
           ) : (
             <>
@@ -1415,10 +1533,11 @@ function ProjectTaskQueueView({
           {t.status === 'queued' && (
             <button
               type="button"
-              onClick={() => act(api.projects.start(t.id), 'Started on isolated git worktree').then(() => onOpenSession(t.id))}
-              className="btn h-7 px-2.5 text-[11.5px]"
+              onClick={() => act(api.projects.start(t.id), 'Started').then(() => onOpenSession(t.id))}
+              className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border border-indigo-400/35 bg-indigo-500/20 px-2.5 text-[11.5px] font-medium text-indigo-200 transition-colors hover:bg-indigo-500/30"
+              title="Send and run this task now"
             >
-              <Play size={11} /> Start
+              <Zap size={11} fill="currentColor" className="text-amber-400" /> Send now
             </button>
           )}
           {t.status === 'doing' && (

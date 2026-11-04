@@ -238,6 +238,18 @@ export interface LogLine {
   meta?: string
 }
 
+export interface QueuedMessage {
+  id: number
+  task_id: number
+  prompt: string
+  mentions: string
+  cli?: CliId
+  model?: string
+  effort?: EffortLevel
+  permission_mode?: PermissionMode
+  created_at: string
+}
+
 export interface TaskChanges {
   branch: string
   cwd: string

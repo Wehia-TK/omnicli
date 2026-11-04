@@ -3,7 +3,7 @@ import type { CliSubscriptionStatus, Settings } from '@shared/types'
 import { act, api, useData } from '../lib/api'
 import { relative } from '../lib/dates'
 import { CliAvatar } from './CliAvatars'
-import { cx, Field, Modal } from './ui'
+import { cx, Field, Modal, SkeletonPill } from './ui'
 
 const fmtTokens = (n: number): string =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
@@ -20,6 +20,17 @@ export function SubscriptionStatusStrip({
   onSelectCli: (c: CliSubscriptionStatus) => void
   onOpenLimitsModal: () => void
 }): React.JSX.Element {
+  if (!clis?.length) {
+    return (
+      <div className="flex items-center gap-1.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <SkeletonPill width="w-24" />
+        <SkeletonPill width="w-28" />
+        <SkeletonPill width="w-22" />
+        <SkeletonPill width="w-22" />
+        <div className="h-7 w-16 animate-pulse rounded-md border border-white/[0.06] bg-white/[0.03]" />
+      </div>
+    )
+  }
   return (
     <div className="flex items-center gap-1.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
       {clis.map((sub) => {

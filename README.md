@@ -54,6 +54,10 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 ### 5. 💻 Embedded Interactive Terminal & Tasks
 - High-performance native terminal sessions powered by `@lydell/node-pty` and `@xterm/xterm` (with `@xterm/addon-fit`).
 - Support for interactive conversational threads and queued background tasks.
+- **Message queue with "Send now"**: while an AI is working, press Enter (or **Queue**) to queue follow-ups that run automatically when the current turn ends. Use **Send now** to interrupt the current run and send right away, from the composer or from any queued message.
+- **Live thinking stream**: the model's reasoning steps, including Antigravity's transcript, show up in the session as it runs.
+- **Answer vs. build routing**: plain questions get a direct answer with no file edits, and code only changes when you ask for it.
+- Skeleton placeholders for the subscription strip, projects, sessions, the live stream, git changes, and the knowledge base while they first load.
 - Automated scheduled runs (hourly, daily, weekly) for recurring audits, tests, or repo maintenance.
 
 ### 6. 🔌 MCP & Skills Integration

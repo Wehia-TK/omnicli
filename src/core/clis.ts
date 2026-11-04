@@ -967,6 +967,35 @@ export function agyDeniedActions(conversationId: string, sinceMs: number): strin
   return []
 }
 
+/** Extract thinking and reasoning steps recorded by Antigravity in ~/.gemini/antigravity*\/brain\/*\/transcript.jsonl */
+export function agyThinkingSteps(conversationId: string, sinceMs: number): { stepIndex: number; thinking: string }[] {
+  const home = homedir()
+  for (const root of [join(home, '.gemini', 'antigravity-cli', 'brain'), join(home, '.gemini', 'antigravity', 'brain')]) {
+    const dir = join(root, conversationId, '.system_generated', 'logs')
+    const file = existsSync(join(dir, 'transcript_full.jsonl')) ? join(dir, 'transcript_full.jsonl') : join(dir, 'transcript.jsonl')
+    if (!existsSync(file)) continue
+    const out: { stepIndex: number; thinking: string }[] = []
+    try {
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.includes('"thinking"') && !line.includes('"PLANNER_RESPONSE"')) continue
+        try {
+          const o = JSON.parse(line) as { step_index?: number; created_at?: string; thinking?: string }
+          if (o.created_at && Date.parse(o.created_at) < sinceMs - 5000) continue
+          if (typeof o.thinking === 'string' && o.thinking.trim()) {
+            out.push({ stepIndex: o.step_index ?? out.length, thinking: o.thinking.trim() })
+          }
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return out
+  }
+  return []
+}
+
 // ───────────────────────────── Codex: live rate limits ─────────────────────────────
 
 interface CodexLive {

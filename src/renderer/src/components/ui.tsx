@@ -74,3 +74,42 @@ export function Empty({ icon, title, hint, action }: { icon: ReactNode; title: s
 export function confirmAction(message: string): boolean {
   return window.confirm(message)
 }
+
+export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
+  return (
+    <div
+      className={cx(
+        'animate-pulse rounded-md bg-white/[0.06] border border-white/[0.04]',
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+export function SkeletonPill({ className, width = 'w-24' }: { className?: string; width?: string }): React.JSX.Element {
+  return (
+    <div className={cx('h-7 animate-pulse rounded-full border border-white/[0.07] bg-white/[0.04] flex items-center px-2.5 gap-2', width, className)}>
+      <div className="size-3 rounded-full bg-white/[0.1] shrink-0" />
+      <div className="h-2.5 flex-1 rounded bg-white/[0.08]" />
+    </div>
+  )
+}
+
+export function SkeletonCard({ className, lines = 3 }: { className?: string; lines?: number }): React.JSX.Element {
+  return (
+    <div className={cx('card p-4 space-y-2.5 animate-pulse border-white/[0.06] bg-white/[0.02]', className)}>
+      <div className="flex items-center gap-2">
+        <div className="size-4 rounded-full bg-white/[0.1]" />
+        <div className="h-3 w-1/3 rounded bg-white/[0.1]" />
+      </div>
+      {Array.from({ length: lines }).map((_, i) => (
+        <div
+          key={i}
+          className="h-2.5 rounded bg-white/[0.06]"
+          style={{ width: `${Math.max(45, 95 - i * 18)}%` }}
+        />
+      ))}
+    </div>
+  )
+}

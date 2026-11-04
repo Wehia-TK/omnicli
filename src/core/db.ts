@@ -148,6 +148,21 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   `
+,
+  `
+  CREATE TABLE IF NOT EXISTS queued_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES project_tasks(id) ON DELETE CASCADE,
+    prompt TEXT NOT NULL,
+    mentions TEXT NOT NULL DEFAULT '[]',
+    cli TEXT,
+    model TEXT,
+    effort TEXT,
+    permission_mode TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_queued_messages_task ON queued_messages(task_id, id);
+  `
 ]
 
 export function openDatabase(dataDir: string): string {
