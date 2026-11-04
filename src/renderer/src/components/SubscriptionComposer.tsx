@@ -8,6 +8,7 @@ import {
   Folder,
   Gauge,
   GitBranch,
+  Loader2,
   Lock,
   Mic,
   Monitor,
@@ -34,6 +35,7 @@ import type {
   SkillInfo
 } from '@shared/types'
 import { api, toast } from '../lib/api'
+import { startMicRecording, type MicRecording } from '../lib/recorder'
 import { CliAvatar } from './CliAvatars'
 import { cx } from './ui'
 import { ComparePicker, ImageThumb } from './Workbench'
@@ -134,6 +136,16 @@ function calcFixedMenuPos(el: HTMLElement | null, menuWidth: number, preferredHe
   }
 }
 
+interface SpeechRec {
+  lang: string
+  interimResults: boolean
+  onresult: (e: { results: { [k: number]: { [k: number]: { transcript: string } } } }) => void
+  onend: () => void
+  onerror: (e: { error?: string }) => void
+  start: () => void
+  stop: () => void
+}
+
 export function SubscriptionComposer({
   projects,
   currentProject,
@@ -175,6 +187,9 @@ export function SubscriptionComposer({
   const [previewCliId, setPreviewCliId] = useState<CliId>(selectedCli)
   const [fileFilter, setFileFilter] = useState('')
   const [listening, setListening] = useState(false)
+  const recognitionRef = useRef<SpeechRec | null>(null)
+  const micRef = useRef<MicRecording | null>(null)
+  const [transcribing, setTranscribing] = useState(false)
   const [estimate, setEstimate] = useState<{ tokens: number; contextTokens: number; continuing: boolean } | null>(null)
   const [dragOver, setDragOver] = useState(false)
 
@@ -356,37 +371,88 @@ export function SubscriptionComposer({
     setMentions(mentions.filter((_, i) => i !== idx))
   }
 
-  const toggleDictation = (): void => {
-    const SpeechRecognition =
-      (window as unknown as { SpeechRecognition?: new () => unknown; webkitSpeechRecognition?: new () => unknown })
-        .SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: new () => unknown }).webkitSpeechRecognition
-    if (!SpeechRecognition) {
-      textareaRef.current?.focus()
-      return
+  const appendTranscript = (transcript: string): void => {
+    if (transcript) setText((prev) => (prev ? `${prev} ${transcript}` : transcript))
+    textareaRef.current?.focus()
+  }
+
+  const finishRecording = async (): Promise<void> => {
+    const rec = micRef.current
+    micRef.current = null
+    if (!rec) return
+    const pcm = rec.stop()
+    setListening(false)
+    setTranscribing(true)
+    try {
+      const transcript = await api.voice.transcribe(pcm)
+      if (transcript) appendTranscript(transcript)
+      else toast("Didn't catch anything — try again")
+    } catch (e) {
+      toast((e as Error).message, true)
+    } finally {
+      setTranscribing(false)
     }
+  }
+
+  const toggleDictation = async (): Promise<void> => {
+    if (transcribing) return
     if (listening) {
+      if (micRef.current) return void finishRecording()
+      recognitionRef.current?.stop()
+      void api.voice.stop()
       setListening(false)
       return
     }
-    try {
-      const rec = new SpeechRecognition() as {
-        lang: string
-        interimResults: boolean
-        onresult: (e: { results: { [k: number]: { [k: number]: { transcript: string } } } }) => void
-        onend: () => void
-        onerror: () => void
-        start: () => void
+    const engine = await api.voice.engine().catch(() => 'none' as const)
+    // Best: local Parakeet model — record here, transcribe in the main process
+    if (engine === 'parakeet') {
+      try {
+        micRef.current = await startMicRecording(() => void finishRecording())
+      } catch (e) {
+        const name = (e as Error).name
+        toast(name === 'NotAllowedError' ? 'Microphone access was denied' : name === 'NotFoundError' ? 'No microphone found' : (e as Error).message, true)
+        return
       }
+      setListening(true)
+      void api.voice.warmup().catch(() => undefined) // load the model while the user is speaking
+      return
+    }
+    // Fallback on Windows: built-in offline recognizer (Electron's Web Speech API has no backend and always errors).
+    if (engine === 'system') {
+      setListening(true)
+      try {
+        const transcript = await api.voice.listen()
+        if (transcript) appendTranscript(transcript)
+        else toast("Didn't catch anything — try again")
+      } catch (e) {
+        toast((e as Error).message, true)
+      } finally {
+        setListening(false)
+      }
+      return
+    }
+    const SR = (window as unknown as { SpeechRecognition?: new () => SpeechRec; webkitSpeechRecognition?: new () => SpeechRec })
+    const Ctor = SR.SpeechRecognition || SR.webkitSpeechRecognition
+    if (!Ctor) {
+      toast("Voice input isn't available here — use your OS dictation (macOS: press Fn twice)", true)
+      textareaRef.current?.focus()
+      return
+    }
+    try {
+      const rec = new Ctor()
+      recognitionRef.current = rec
       rec.lang = 'en-US'
       rec.interimResults = false
-      setListening(true)
-      rec.onresult = (ev) => {
-        const transcript = ev.results?.[0]?.[0]?.transcript ?? ''
-        if (transcript) setText((prev) => (prev ? `${prev} ${transcript}` : transcript))
-      }
+      rec.onresult = (ev) => appendTranscript(ev.results?.[0]?.[0]?.transcript ?? '')
       rec.onend = () => setListening(false)
-      rec.onerror = () => setListening(false)
+      rec.onerror = (ev) => {
+        setListening(false)
+        toast(
+          ev.error === 'not-allowed' ? 'Microphone access was denied' : ev.error === 'no-speech' ? "Didn't catch anything — try again" : `Voice input failed (${ev.error ?? 'unknown'}) — use your OS dictation instead`,
+          true
+        )
+      }
+      setListening(true)
       rec.start()
     } catch {
       setListening(false)
@@ -395,7 +461,7 @@ export function SubscriptionComposer({
 
   return (
     <div ref={containerRef} className="w-full select-none">
-      {/* Top strip above composer box — matches screenshot `📁 AI Wrapper v` */}
+      {/* Top strip above composer box — matches screenshot `📁 Omni CLI v` */}
       <div className="mb-2 flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
           <button
@@ -631,14 +697,15 @@ export function SubscriptionComposer({
 
             <button
               type="button"
-              onClick={toggleDictation}
-              title="Voice input"
+              onClick={() => void toggleDictation()}
+              disabled={transcribing}
+              title={transcribing ? 'Transcribing…' : listening ? 'Stop and insert what you said' : 'Voice input — click, speak, click again to insert'}
               className={cx(
                 'flex size-7 cursor-pointer items-center justify-center rounded-lg transition-colors',
                 listening ? 'animate-pulse bg-red-500/20 text-red-400' : 'text-zinc-400 hover:bg-white/[0.08] hover:text-zinc-200'
               )}
             >
-              <Mic size={15} />
+              {transcribing ? <Loader2 size={15} className="animate-spin" /> : <Mic size={15} />}
             </button>
 
             {isRunning ? (

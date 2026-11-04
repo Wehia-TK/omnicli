@@ -10,6 +10,7 @@ import { getSettings, updateSettings } from './settings'
 import { skills } from './skills'
 import { terminal } from './terminal'
 import { updater } from './updater'
+import { voice } from './voice'
 import { attachments, github, history, review, rules } from './workspace'
 
 export const coreApi = {
@@ -17,6 +18,7 @@ export const coreApi = {
   clis,
   knowledge,
   terminal,
+  voice,
   skills,
   approvals,
   rules,

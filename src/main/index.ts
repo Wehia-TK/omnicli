@@ -9,7 +9,8 @@ import { initProjects, projects, stopAllRuns } from '../core/projects'
 import { initScheduler, phoneNotify } from '../core/scheduler'
 import { initWorkspace } from '../core/workspace'
 import { initTerminal, stopAllTerminals } from '../core/terminal'
-import { initUpdater, relaunchDevSession } from '../core/updater'
+import { initUpdater } from '../core/updater'
+import { voice } from '../core/voice'
 import appIconPng from '../../resources/icon.png?asset'
 import appIconIco from '../../resources/icon.ico?asset'
 
@@ -152,7 +153,33 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+const isRelaunch = process.argv.includes('--relaunch')
+
+/**
+ * Only one Omni CLI may run at a time (a second launch just focuses the first). A restart spawns the new
+ * process while the old one is still shutting down, so a relaunched instance waits for the lock to free up.
+ */
+async function acquireSingleInstance(): Promise<boolean> {
+  const attempts = isRelaunch ? 60 : 1
+  for (let i = 0; i < attempts; i++) {
+    if (app.requestSingleInstanceLock()) return true
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return false
+}
+
+app.on('second-instance', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+})
+
+app.whenReady().then(async () => {
+  if (!(await acquireSingleInstance())) {
+    app.quit()
+    return
+  }
   // Self-update: compares the running code with the source checkout it was launched from
   const appRoot = app.getAppPath()
   ensureWindowsShortcut(appRoot)
@@ -160,11 +187,9 @@ app.whenReady().then(() => {
     root: appRoot,
     packaged: app.isPackaged,
     restart: () => {
-      if (app.isPackaged) {
-        app.relaunch()
-      } else {
-        relaunchDevSession(appRoot)
-      }
+      // A dev-server URL from `npm run dev` would be stale after the restart — load the fresh build instead
+      delete (process.env as Record<string, string | undefined>).ELECTRON_RENDERER_URL
+      app.relaunch({ args: [...process.argv.slice(1).filter((a) => a !== '--relaunch'), '--relaunch'] })
       app.quit()
     }
   }).catch((e) => console.warn('[updater]', (e as Error).message))
@@ -298,6 +323,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   stopAllRuns()
   stopAllTerminals()
+  voice.shutdown()
   stopGraphWatchers()
 })
 

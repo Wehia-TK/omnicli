@@ -208,6 +208,13 @@ export const api = {
     merge: (id: number) => call<ProjectTask>('projects.merge', id),
     discard: (id: number) => call<ProjectTask>('projects.discard', id)
   },
+  voice: {
+    engine: () => call<'parakeet' | 'system' | 'none'>('voice.engine'),
+    warmup: () => call<true>('voice.warmup'),
+    transcribe: (pcm: Float32Array) => call<string>('voice.transcribe', pcm),
+    listen: () => call<string>('voice.listen'),
+    stop: () => call<true>('voice.stop')
+  },
   terminal: {
     start: (sessionId: string, cwd: string, initialCommand?: string, cols?: number, rows?: number) =>
       call<{ sessionId: string; cwd: string; pty: boolean }>('terminal.start', sessionId, cwd, initialCommand, cols, rows),

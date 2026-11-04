@@ -33,7 +33,10 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Omni CLI uses the microphone for voice input in the prompt box."
+      }
     },
     "asarUnpack": [
       "node_modules/@lydell/**"

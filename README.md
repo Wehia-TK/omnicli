@@ -34,6 +34,8 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 - Model picker with real CLI model catalogs and granular **reasoning effort level** controls (`low`, `medium`, `high`, `xhigh`, `max`).
 - Permission mode toggling (`default`, `accept-edits`, `bypass`, `plan`).
 - Visual indicators showing CLI authentication status (unauthenticated subscriptions remain disabled/greyed out).
+- **Voice input** (mic button in the composer): click, speak, click again to insert. Transcription runs locally with **NVIDIA Parakeet TDT 0.6B** (int8, via sherpa-onnx) — about 1 s per phrase on CPU, the model stays loaded between dictations. It reuses the model and Python venv from a Voice Studio install (`D:\Voice Studio\VoiceStudio`, or set `OMNI_VOICE_STUDIO`); nothing is downloaded. Without it, Windows falls back to the built-in (much less accurate) System.Speech recognizer. Code: `src/core/voice.ts`, `src/renderer/src/lib/recorder.ts`.
+- **Single instance**: only one Omni CLI runs at a time — launching it again just focuses the open window. After an in-app update the app restarts itself (the new process waits for the old one to exit, then takes over).
 
 ### 2. 📊 Live Usage Limits & Quota Metering
 - Tracks live 5-hour rolling window usage, token counts, request counts, and reset countdowns.

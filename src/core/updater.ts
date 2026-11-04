@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
@@ -193,21 +193,4 @@ export const updater = {
       applying = false
     }
   }
-}
-
-/**
- * Restart into the freshly built `out/` bundle by spawning `electron.exe` directly
- * (GUI subsystem binary — never opens a cmd.exe or Windows Terminal window).
- */
-export function relaunchDevSession(projectRoot: string): void {
-  const env = { ...process.env }
-  delete env.ELECTRON_RENDERER_URL
-  const child = spawn(process.execPath, [projectRoot], {
-    cwd: projectRoot,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    env
-  })
-  child.unref()
 }

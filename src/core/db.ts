@@ -203,7 +203,7 @@ function seedInitialProjects(): void {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
-        'AI Wrapper',
+        'Omni CLI',
         aiWrapperFolder,
         'Centralized desktop app for AI CLI subscriptions (Claude Code, Antigravity, Codex, Copilot) with live usage limits and shared Project Knowledge Base.',
         'npm run typecheck && npm run build',
