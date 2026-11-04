@@ -767,7 +767,7 @@ function parseClaudeLine(line: string): ParsedTurn | null {
   }
 }
 
-/** Sum real token usage from Claude Code transcripts (~/.claude/projects/**.jsonl) — includes usage from Claude Desktop & terminal, not just AI Hub. */
+/** Sum real token usage from Claude Code transcripts (~/.claude/projects/**.jsonl) — includes usage from Claude Desktop & terminal, not just Omni CLI. */
 async function scanClaudeTranscripts(starts: { window: number; today: number; week: number }): Promise<TranscriptTotals> {
   if (cachedClaudeTranscripts && Date.now() - cachedClaudeTranscripts.at < 30_000) return cachedClaudeTranscripts
   if (claudeScanInFlight) return claudeScanInFlight
@@ -813,7 +813,7 @@ async function scanAgyTranscripts(starts: { window: number; today: number; week:
   if (agyScanInFlight) return agyScanInFlight
   agyScanInFlight = (async () => {
     const totals = emptyTotals()
-    // Conversations started from AI Hub know their model; others are attributed to "unknown"
+    // Conversations started from Omni CLI know their model; others are attributed to "unknown"
     const convModel = new Map<string, string>()
     try {
       for (const r of all<{ agy_conversation: string; model: string }>(
@@ -988,7 +988,7 @@ let agyQuotaInFlight: Promise<AgyQuotaGroup[] | null> | null = null
 /**
  * Antigravity's own `/usage` command returns the exact quota groups shown in the Antigravity app
  * (Gemini models / Claude & GPT models / Gemini 4 Argon, each with 5h + weekly windows). It runs locally,
- * costs 0 tokens, and the CLI uses its own sign-in — AI Hub never touches the token.
+ * costs 0 tokens, and the CLI uses its own sign-in — Omni CLI never touches the token.
  */
 async function fetchAgyLiveQuota(force = false): Promise<AgyQuotaGroup[] | null> {
   const now = Date.now()
@@ -1125,7 +1125,7 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
   }
   if (!authenticated) return base
 
-  // AI Hub's own run log (always available)
+  // Omni CLI's own run log (always available)
   const hub = (since: number): { tokens: number; reqs: number; ms: number; oldest: number | null } =>
     get<{ tokens: number; reqs: number; ms: number; oldest: number | null }>(
       `SELECT COALESCE(SUM(tokens), 0) AS tokens, COUNT(*) AS reqs, COALESCE(SUM(duration_ms), 0) AS ms, MIN(epoch_ms) AS oldest
@@ -1297,7 +1297,7 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
       }
     })
     const unknown = tx.byModel.get('unknown')
-    if (unknown) out.liveNote = `${unknown.turns} turns from Antigravity outside AI Hub (model not recorded)`
+    if (unknown) out.liveNote = `${unknown.turns} turns from Antigravity outside Omni CLI (model not recorded)`
   }
 
   // Estimated path (Gemini, Copilot, Antigravity overall, and offline fallbacks)

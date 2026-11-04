@@ -208,7 +208,7 @@ function seedInitialProjects(): void {
     p1,
     'architecture',
     'App Architecture & Multi-CLI Subscription Engine',
-    `# AI Wrapper (AI Hub)\n\n- **Stack**: Electron 44 + electron-vite + React 19 + Tailwind CSS v4 + Node built-in \`node:sqlite\`.\n- **Core Modules**:\n  - \`src/core/clis.ts\`: Detects installed & authenticated subscription CLIs (\`claude\`, \`agy\`, \`codex\`, \`copilot\`), queries models, and tracks live 5-hour rolling window limits.\n  - \`src/core/knowledge.ts\`: Unified Project Knowledge Base synced to SQLite and \`.ai-kb/PROJECT_KNOWLEDGE.md\` so every AI CLI shares context seamlessly.\n  - \`src/core/projects.ts\`: Interactive threads + background task queue with isolated git worktrees and automatic CLI limit handover.\n  - \`src/core/terminal.ts\`: Embedded interactive terminal sessions per project/worktree.`,
+    `# Omni CLI\n\n- **Stack**: Electron 44 + electron-vite + React 19 + Tailwind CSS v4 + Node built-in \`node:sqlite\`.\n- **Core Modules**:\n  - \`src/core/clis.ts\`: Detects installed & authenticated subscription CLIs (\`claude\`, \`agy\`, \`codex\`, \`copilot\`), queries models, and tracks live 5-hour rolling window limits.\n  - \`src/core/knowledge.ts\`: Unified Project Knowledge Base synced to SQLite and \`.ai-kb/PROJECT_KNOWLEDGE.md\` so every AI CLI shares context seamlessly.\n  - \`src/core/projects.ts\`: Interactive threads + background task queue with isolated git worktrees and automatic CLI limit handover.\n  - \`src/core/terminal.ts\`: Embedded interactive terminal sessions per project/worktree.`,
     'src/core/clis.ts, src/core/knowledge.ts, src/core/projects.ts, src/renderer/src/App.tsx',
     'scanner',
     1,

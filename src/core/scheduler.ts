@@ -141,7 +141,7 @@ export const schedules = {
 
   testPhone: async (): Promise<true> => {
     if (!getSettings().ntfyTopic.trim()) throw new Error('Set an ntfy topic in Settings first')
-    await publishNtfy('AI Hub', 'Phone notifications are working.')
+    await publishNtfy('Omni CLI', 'Phone notifications are working.')
     return true
   }
 }

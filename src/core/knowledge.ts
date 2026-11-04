@@ -48,7 +48,7 @@ export function syncKnowledgeToDir(projectId: number, dir: string): string | nul
 
     const lines: string[] = [
       `# ${p.name} — Shared AI Project Knowledge Base`,
-      `> Auto-synced by AI Hub (${nowLocal()}). Accessible to Claude Code, Antigravity, OpenAI Codex, and GitHub Copilot.`,
+      `> Auto-synced by Omni CLI (${nowLocal()}). Accessible to Claude Code, Antigravity, OpenAI Codex, and GitHub Copilot.`,
       ''
     ]
     if (p.notes.trim()) {

@@ -296,7 +296,7 @@ export interface TerminalOutputEvent {
   exitCode?: number | null
 }
 
-/** Result of checking whether the running AI Hub is behind its source checkout. */
+/** Result of checking whether the running Omni CLI is behind its source checkout. */
 export interface UpdateInfo {
   /** false = can't self-update (installed build, no git checkout) — see `reason` */
   supported: boolean
@@ -307,7 +307,7 @@ export interface UpdateInfo {
   branch: string
   /** short HEAD hash */
   commit: string
-  /** commits made since AI Hub was launched */
+  /** commits made since Omni CLI was launched */
   localCommits: { hash: string; subject: string }[]
   /** files edited since launch that need a restart (main / preload / core / shared / package files) */
   changedFiles: string[]

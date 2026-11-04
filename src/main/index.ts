@@ -13,8 +13,8 @@ import { initUpdater, relaunchDevSession } from '../core/updater'
 import appIconPng from '../../resources/icon.png?asset'
 import appIconIco from '../../resources/icon.ico?asset'
 
-const APP_ID = 'com.aiwrapper.hub'
-const APP_NAME = 'AI Hub'
+const APP_ID = 'com.omnicli.app'
+const APP_NAME = 'Omni CLI'
 
 app.setName(APP_NAME)
 if (process.platform === 'win32') {
@@ -26,6 +26,8 @@ function ensureWindowsShortcut(appRoot: string): void {
   if (process.platform !== 'win32') return
   const programsDir = join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')
   const staleElectronLnk = join(programsDir, 'Electron.lnk')
+  const staleAiHubLnk = join(programsDir, 'AI Hub.lnk')
+  const localAiHubLnk = join(appRoot, 'AI Hub.lnk')
   try {
     if (existsSync(staleElectronLnk)) {
       const info = shell.readShortcutLink(staleElectronLnk)
@@ -33,6 +35,8 @@ function ensureWindowsShortcut(appRoot: string): void {
         unlinkSync(staleElectronLnk)
       }
     }
+    if (existsSync(staleAiHubLnk)) unlinkSync(staleAiHubLnk)
+    if (existsSync(localAiHubLnk)) unlinkSync(localAiHubLnk)
   } catch {
     // ignore
   }
@@ -182,7 +186,7 @@ app.whenReady().then(() => {
     broadcastChanged()
     if (!req) return
     const t = projects.taskInfo(req.taskId)
-    const title = `${t?.projectName ?? 'AI Hub'}: approval needed`
+    const title = `${t?.projectName ?? 'Omni CLI'}: approval needed`
     if (Notification.isSupported() && !mainWindow?.isFocused()) {
       const n = new Notification({ title, body: req.summary.slice(0, 160) })
       n.on('click', () => {

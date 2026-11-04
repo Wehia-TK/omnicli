@@ -125,7 +125,7 @@ export function GitControls({ project }: { project: Project }): React.JSX.Elemen
               <input
                 className="input h-8 text-[12.5px]"
                 value={message}
-                placeholder="Update from AI Hub"
+                placeholder="Update from Omni CLI"
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && push()}
               />

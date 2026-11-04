@@ -511,7 +511,7 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
   const effort = resolveEffortFor(t, p)
   const { cliModelArg: model, effortArg } = resolveCliModelWithEffort('claude', baseModel, effort)
   const prompt = buildFullPrompt('claude', t, p, ask, cwd)
-  // Default = ask in AI Hub for every edit/command; Accept Edits = only commands and other risky tools ask
+  // Default = ask in Omni CLI for every edit/command; Accept Edits = only commands and other risky tools ask
   const permMode =
     t.permission_mode === 'bypass'
       ? 'bypassPermissions'
@@ -725,7 +725,7 @@ function commitWorktreeEditsIfNeeded(t: ProjectTask, label: string): boolean {
 export const PERMISSION_BLOCKED = 'Stopped: permission needed.'
 
 /**
- * Pasted images live in AI Hub's data folder, which sandboxed CLIs (Antigravity, Gemini) refuse to read.
+ * Pasted images live in Omni CLI's data folder, which sandboxed CLIs (Antigravity, Gemini) refuse to read.
  * Copy them into the workspace's git-excluded .ai-kb/attachments folder and point the task at those copies.
  */
 function localizeAttachments(t: ProjectTask, cwd: string): ProjectTask {
@@ -995,7 +995,7 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
         `${PERMISSION_BLOCKED} Antigravity wanted to:\n${denied
           .slice(0, 6)
           .map((d) => `• ${d}`)
-          .join('\n')}\nIt can't ask for approval when run from AI Hub, so these were blocked. Continue with Full Auto to allow them.`
+          .join('\n')}\nIt can't ask for approval when run from Omni CLI, so these were blocked. Continue with Full Auto to allow them.`
       )
     } else if (failed || turnedDownByLimit(false, errorText)) {
       if (turnedDownByLimit(false, failureText)) {

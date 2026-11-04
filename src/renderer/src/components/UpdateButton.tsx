@@ -30,10 +30,10 @@ export function UpdateButton(): React.JSX.Element {
       setInfo(res)
       if (res.available) {
         const sig = signature(res)
-        if (!manual && sig !== announced.current) toast('An update for AI Hub is available — click the update button to restart into it')
+        if (!manual && sig !== announced.current) toast('An update for Omni CLI is available — click the update button to restart into it')
         announced.current = sig
       } else if (manual) {
-        toast(res.supported ? 'AI Hub is up to date' : res.reason)
+        toast(res.supported ? 'Omni CLI is up to date' : res.reason)
       }
       return res
     } catch (e) {
@@ -172,14 +172,14 @@ function UpdateModal({
 
           {!info.available ? (
             <div className="flex items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/[0.07] px-3 py-2.5 text-emerald-200">
-              <Check size={14} /> AI Hub is up to date — no changes to its code since it was launched
+              <Check size={14} /> Omni CLI is up to date — no changes to its code since it was launched
               {info.remote ? ` and nothing new on ${info.remote}` : ''}.
             </div>
           ) : (
             <p className="leading-relaxed text-zinc-300">
               {restartCount === 1 ? 'One change needs' : `${restartCount} changes need`} a restart to take effect. Updating will
               {info.remoteCommits.length ? ' pull the new commits,' : ''} install dependencies if they changed, verify the code
-              compiles, then restart AI Hub. Running sessions are stopped by the restart.
+              compiles, then restart Omni CLI. Running sessions are stopped by the restart.
             </p>
           )}
 

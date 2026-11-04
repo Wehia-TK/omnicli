@@ -59,8 +59,8 @@ const gitSync = (cwd: string, args: string[]): string => {
 // ───────────────────────────── Rules (CLAUDE.md / AGENTS.md / GEMINI.md / Copilot) ─────────────────────────────
 
 const RULE_FILES = ['CLAUDE.md', 'AGENTS.md', '.github/copilot-instructions.md'] as const
-const START = '<!-- AI Hub rules: start (edited in AI Hub — shared by every AI) -->'
-const END = '<!-- AI Hub rules: end -->'
+const START = '<!-- Omni CLI rules: start (edited in Omni CLI — shared by every AI) -->'
+const END = '<!-- Omni CLI rules: end -->'
 
 export const rules = {
   get: (projectId: number): { text: string; files: { name: string; exists: boolean; managed: boolean; otherContent: boolean }[] } => {
@@ -338,7 +338,7 @@ export const github = {
     const log = gitSync(cwd, ['log', '--format=- %s', `${t.base_commit ?? 'HEAD~1'}..HEAD`]).trim()
     const out = await runAsync(
       'gh',
-      ['pr', 'create', '--head', t.branch, '--title', (title || t.title).slice(0, 200), '--body', body || `${t.notes || t.title}\n\n${log}\n\n_Created from AI Hub_`],
+      ['pr', 'create', '--head', t.branch, '--title', (title || t.title).slice(0, 200), '--body', body || `${t.notes || t.title}\n\n${log}\n\n_Created from Omni CLI_`],
       p.folder
     )
     const url = out.trim().split('\n').find((l) => /^https?:\/\//.test(l)) ?? out.trim()

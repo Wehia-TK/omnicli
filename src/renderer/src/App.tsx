@@ -301,7 +301,7 @@ export default function App(): React.JSX.Element {
       >
         <div className="flex items-center gap-2.5">
           <img src={appLogo} alt="" draggable={false} className="size-6 rounded-md shadow-[0_2px_10px_rgba(139,92,246,0.4)]" />
-          <span className="text-[13px] font-semibold tracking-tight text-zinc-100">AI Hub</span>
+          <span className="text-[13px] font-semibold tracking-tight text-zinc-100">Omni CLI</span>
         </div>
 
         {/* Live Subscription Status Strip, Actions & Custom Window Controls */}

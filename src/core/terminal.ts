@@ -154,9 +154,9 @@ export const terminal = {
     const exe = findCliExecutable(cli) || cli
     const folder = cwd && existsSync(cwd) ? cwd : process.cwd()
     const cmdLine = `& ${psq(exe)} ${extraArgs}`.trim()
-    const script = [`Set-Location -LiteralPath ${psq(folder)}`, `$host.UI.RawUI.WindowTitle = ${psq(`AI Hub — ${cli.toUpperCase()} (${folder})`)}`, cmdLine].join('; ')
+    const script = [`Set-Location -LiteralPath ${psq(folder)}`, `$host.UI.RawUI.WindowTitle = ${psq(`Omni CLI — ${cli.toUpperCase()} (${folder})`)}`, cmdLine].join('; ')
     const encoded = Buffer.from(script, 'utf16le').toString('base64')
-    const child = spawn('cmd.exe', ['/d', '/s', '/c', `"start "AI Hub CLI" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}"`], {
+    const child = spawn('cmd.exe', ['/d', '/s', '/c', `"start "Omni CLI" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}"`], {
       stdio: 'ignore',
       windowsHide: true,
       windowsVerbatimArguments: true

@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import type { UpdateInfo } from '@shared/types'
 
 /**
- * Self-update for the source checkout AI Hub runs from (`npm run dev` / Start AI Hub.bat).
+ * Self-update for the source checkout Omni CLI runs from (`npm run dev` / Start Omni CLI.bat).
  *
  * "An update" = anything the running process doesn't have yet:
  *  - source files edited since launch (e.g. an AI just changed this app) that need a restart
@@ -118,7 +118,7 @@ export const updater = {
       reason: ''
     }
     if (packaged) return { ...base, reason: 'This is an installed build — rebuild the installer (npm run dist) from the source folder to update it.' }
-    if (!root || !existsSync(join(root, '.git'))) return { ...base, reason: 'AI Hub is not running from a git checkout, so there is nothing to compare against.' }
+    if (!root || !existsSync(join(root, '.git'))) return { ...base, reason: 'Omni CLI is not running from a git checkout, so there is nothing to compare against.' }
 
     const [branchR, headR, files] = await Promise.all([git(['symbolic-ref', '--short', 'HEAD']), git(['rev-parse', 'HEAD']), changedSinceLaunch()])
     const head = headR.ok ? headR.out : ''
@@ -149,7 +149,7 @@ export const updater = {
     }
   },
 
-  /** Pull (if behind), reinstall deps if package files changed, typecheck, then restart AI Hub. */
+  /** Pull (if behind), reinstall deps if package files changed, typecheck, then restart Omni CLI. */
   apply: async (): Promise<{ restarting: true; steps: string[] }> => {
     if (applying) throw new Error('An update is already being applied')
     applying = true
@@ -177,13 +177,13 @@ export const updater = {
       const tc = await sh('npm', ['run', 'typecheck'], 5 * 60_000)
       if (!tc.ok) {
         const errs = tc.out.split('\n').filter((l) => /error TS/.test(l))
-        throw new Error(`The new code has type errors, so AI Hub kept running the current version:\n${(errs.length ? errs : tc.out.split('\n')).slice(0, 6).join('\n')}`)
+        throw new Error(`The new code has type errors, so Omni CLI kept running the current version:\n${(errs.length ? errs : tc.out.split('\n')).slice(0, 6).join('\n')}`)
       }
       steps.push('Typecheck passed')
 
       const bld = await sh('npm', ['run', 'build'], 5 * 60_000)
       if (!bld.ok) {
-        throw new Error(`Build failed, so AI Hub kept running the current version:\n${bld.out.split('\n').slice(-6).join('\n')}`)
+        throw new Error(`Build failed, so Omni CLI kept running the current version:\n${bld.out.split('\n').slice(-6).join('\n')}`)
       }
       steps.push('Built app bundle')
 

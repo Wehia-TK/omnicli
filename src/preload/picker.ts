@@ -2,7 +2,7 @@ import { ipcRenderer } from 'electron'
 
 /**
  * Injected into the browser-preview <webview>. When the host turns picking on, hovering highlights an element and
- * clicking sends a compact description (selector, text, outerHTML, size) back to AI Hub to attach to a prompt.
+ * clicking sends a compact description (selector, text, outerHTML, size) back to Omni CLI to attach to a prompt.
  */
 let picking = false
 let box: HTMLDivElement | null = null

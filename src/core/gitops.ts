@@ -139,7 +139,7 @@ export const gitops = {
     if (!isRepo(folder)) await gitops.init(projectId)
     gitSync(folder, ['add', '-A'])
     if (gitSync(folder, ['status', '--porcelain'], true).trim()) {
-      gitSync(folder, ['commit', '-m', message?.trim() || `Update from AI Hub (${nowLocal().replace('T', ' ')})`])
+      gitSync(folder, ['commit', '-m', message?.trim() || `Update from Omni CLI (${nowLocal().replace('T', ' ')})`])
     }
     if (!gitSync(folder, ['rev-parse', '--verify', 'HEAD'], true).trim()) throw new Error('Nothing to push yet — the repository has no commits')
 

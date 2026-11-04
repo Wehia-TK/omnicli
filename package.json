@@ -1,8 +1,8 @@
 {
-  "name": "ai-wrapper",
-  "productName": "AI Hub",
+  "name": "omni-cli",
+  "productName": "Omni CLI",
   "version": "1.0.0",
-  "description": "Centralized desktop workspace for all your AI CLI subscriptions \u2014 Claude Code, Antigravity, Codex, Gemini, and Copilot \u2014 with live limits, git worktrees, and a unified Project Knowledge Base.",
+  "description": "Centralized desktop workspace for all your AI CLI subscriptions \u2014 Claude Code, Antigravity, Codex, and Copilot \u2014 with live limits, git worktrees, and a unified Project Knowledge Base.",
   "main": "out/main/index.js",
   "private": true,
   "scripts": {
@@ -12,8 +12,8 @@
     "dist": "electron-vite build && electron-builder --win"
   },
   "build": {
-    "appId": "com.aiwrapper.hub",
-    "productName": "AI Hub",
+    "appId": "com.omnicli.app",
+    "productName": "Omni CLI",
     "directories": {
       "output": "release"
     },

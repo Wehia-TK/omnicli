@@ -300,7 +300,7 @@ export function RulesModal({ project, onClose }: { project: Project; onClose: ()
     >
       <div className="space-y-3">
         <p className="muted text-[12.5px]">
-          One set of instructions for every AI. Saved into each CLI&apos;s own rules file so the same rules apply in AI Hub and when you use the CLIs directly.
+          One set of instructions for every AI. Saved into each CLI&apos;s own rules file so the same rules apply in Omni CLI and when you use the CLIs directly.
         </p>
         <textarea
           className="input min-h-[300px] font-mono text-[12.5px]"
@@ -317,7 +317,7 @@ export function RulesModal({ project, onClose }: { project: Project; onClose: ()
                 type="button"
                 className={cx('chip', on && 'chip-active')}
                 onClick={() => setTargets(on ? targets.filter((x) => x !== f.name) : [...targets, f.name])}
-                title={f.exists ? (f.managed ? 'Synced by AI Hub' : 'Exists — AI Hub block will be added at the top') : 'Will be created'}
+                title={f.exists ? (f.managed ? 'Synced by Omni CLI' : 'Exists — Omni CLI block will be added at the top') : 'Will be created'}
               >
                 {on && <Check size={11} />}
                 {f.name} <span className="font-normal opacity-60">· {label[f.name]}</span>
@@ -685,7 +685,7 @@ type WebviewEl = HTMLElement & {
   openDevTools: () => void
 }
 
-/** Preview your running app inside AI Hub and click any element to attach it to the next prompt. */
+/** Preview your running app inside Omni CLI and click any element to attach it to the next prompt. */
 export function BrowserPreview({ project, onPick }: { project: Project; onPick: (m: MentionItem) => void }): React.JSX.Element {
   const storeKey = `aihub-preview-url-${project.id}`
   const initial = useMemo(() => {
