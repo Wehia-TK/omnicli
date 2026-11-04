@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type {
   ApprovalRequest,
   DiffHunk,
@@ -22,16 +22,19 @@ import type {
   Settings,
   SkillInfo,
   TaskChanges,
-  TerminalOutputEvent
+  TerminalOutputEvent,
+  UpdateInfo
 } from '@shared/types'
 
 declare global {
   interface Window {
     aihub?: {
+      platform?: string
       call: (path: string, ...args: unknown[]) => Promise<unknown>
       onChanged: (cb: () => void) => () => void
       onNavigate: (cb: (route: string) => void) => () => void
       onTerminalOutput: (cb: (ev: TerminalOutputEvent) => void) => () => void
+      onWindowMaximizedChange?: (cb: (maximized: boolean) => void) => () => void
       pathForFile: (file: File) => string
     }
   }
@@ -45,11 +48,21 @@ const call = <T>(path: string, ...args: unknown[]): Promise<T> => {
 }
 
 export const api = {
+  window: {
+    minimize: () => call<true>('window.minimize'),
+    maximize: () => call<boolean>('window.maximize'),
+    close: () => call<true>('window.close'),
+    isMaximized: () => call<boolean>('window.isMaximized')
+  },
   app: {
     chooseFolder: () => call<string | null>('app.chooseFolder'),
     openPath: (target: string) => call<true>('app.openPath', target),
     setTheme: (theme: 'dark' | 'light') => call<true>('app.setTheme', theme),
     pickerPreload: () => call<string>('app.pickerPreload')
+  },
+  updates: {
+    check: (fetchRemote = true) => call<UpdateInfo>('updates.check', fetchRemote),
+    apply: () => call<{ restarting: true; steps: string[] }>('updates.apply')
   },
   approvals: {
     list: (taskId?: number) => call<ApprovalRequest[]>('approvals.list', taskId),
@@ -220,28 +233,57 @@ export function useToasts(): ToastItem[] {
   return list
 }
 
-const reloadListeners = new Set<() => void>()
+/** `force` = an explicit refresh after a user action (skips throttling); otherwise a DB-change broadcast. */
+const reloadListeners = new Set<(force: boolean) => void>()
 if (typeof window !== 'undefined' && window.aihub) {
   window.aihub.onChanged(() => {
-    for (const fn of reloadListeners) fn()
+    for (const fn of reloadListeners) fn(false)
   })
 }
 
 export function triggerReload(): void {
-  for (const fn of reloadListeners) fn()
+  for (const fn of reloadListeners) fn(true)
 }
 
-export function useData<T>(fetcher: () => Promise<T>, deps: unknown[] = []): { data: T | undefined; reload: () => void } {
+/**
+ * Fetch data and refetch whenever the backend reports a change.
+ * - Never more than one request in flight per hook (a refetch requested meanwhile runs once afterwards),
+ *   so a streaming run can't pile up IPC calls on the main process.
+ * - `throttleMs` caps how often DB-change broadcasts refetch expensive data (git, file scans, network).
+ */
+export function useData<T>(
+  fetcher: () => Promise<T>,
+  deps: unknown[] = [],
+  opts: { throttleMs?: number } = {}
+): { data: T | undefined; reload: () => void } {
   const [data, setData] = useState<T | undefined>(undefined)
   const [tick, setTick] = useState(0)
+  const fetcherRef = useRef(fetcher)
+  fetcherRef.current = fetcher
+  const throttleRef = useRef(opts.throttleMs ?? 0)
+  throttleRef.current = opts.throttleMs ?? 0
+  const state = useRef({ seq: 0, inFlight: false, queued: false, lastAt: 0, timer: null as ReturnType<typeof setTimeout> | null })
 
   useEffect(() => {
     let alive = true
-    fetcher()
+    const s = state.current
+    const mySeq = ++s.seq
+    s.inFlight = true
+    fetcherRef
+      .current()
       .then((res) => {
         if (alive) setData(res)
       })
       .catch((err) => console.error(err))
+      .finally(() => {
+        if (mySeq !== s.seq) return
+        s.inFlight = false
+        s.lastAt = Date.now()
+        if (s.queued && alive) {
+          s.queued = false
+          setTick((n) => n + 1)
+        }
+      })
     return () => {
       alive = false
     }
@@ -249,16 +291,35 @@ export function useData<T>(fetcher: () => Promise<T>, deps: unknown[] = []): { d
   }, [...deps, tick])
 
   useEffect(() => {
-    const fn = (): void => setTick((n) => n + 1)
+    const s = state.current
+    const fn = (force: boolean): void => {
+      if (s.inFlight) {
+        s.queued = true
+        return
+      }
+      const wait = force ? 0 : throttleRef.current - (Date.now() - s.lastAt)
+      if (wait <= 0) {
+        if (s.timer) clearTimeout(s.timer)
+        s.timer = null
+        setTick((n) => n + 1)
+      } else if (!s.timer) {
+        s.timer = setTimeout(() => {
+          s.timer = null
+          if (s.inFlight) s.queued = true
+          else setTick((n) => n + 1)
+        }, wait)
+      }
+    }
     reloadListeners.add(fn)
     return () => {
       reloadListeners.delete(fn)
+      if (s.timer) clearTimeout(s.timer)
+      s.timer = null
     }
   }, [])
 
   return { data, reload: () => setTick((n) => n + 1) }
 }
-
 export async function act<T>(promise: Promise<T>, okToast?: string): Promise<T | undefined> {
   try {
     const res = await promise

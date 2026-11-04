@@ -97,10 +97,11 @@ interface FixedMenuPos {
   top?: number
   bottom?: number
   maxHeight: number
+  height?: number
 }
 
 function calcFixedMenuPos(el: HTMLElement | null, menuWidth: number, preferredHeight = 360, alignRight = false): FixedMenuPos {
-  if (!el) return { left: 24, top: 100, maxHeight: 340 }
+  if (!el) return { left: 24, top: 100, maxHeight: 340, height: 340 }
   const r = el.getBoundingClientRect()
   const vw = window.innerWidth
   const vh = window.innerHeight
@@ -112,16 +113,20 @@ function calcFixedMenuPos(el: HTMLElement | null, menuWidth: number, preferredHe
   if (left < 16) left = 16
 
   if (spaceBelow >= Math.min(preferredHeight, 280) || spaceBelow >= spaceAbove) {
+    const h = Math.max(200, Math.min(preferredHeight, spaceBelow))
     return {
       left,
       top: r.bottom + 8,
-      maxHeight: Math.max(200, Math.min(preferredHeight, spaceBelow))
+      maxHeight: h,
+      height: h
     }
   }
+  const h = Math.max(200, Math.min(preferredHeight, spaceAbove))
   return {
     left,
     bottom: vh - r.top + 8,
-    maxHeight: Math.max(200, Math.min(preferredHeight, spaceAbove))
+    maxHeight: h,
+    height: h
   }
 }
 
@@ -693,6 +698,7 @@ export function SubscriptionComposer({
             left: menuPos.left,
             top: menuPos.top,
             bottom: menuPos.bottom,
+            height: menuPos.height ?? 380,
             maxHeight: menuPos.maxHeight,
             width: 520
           }}
@@ -724,7 +730,7 @@ export function SubscriptionComposer({
                     onMouseEnter={() => setPreviewCliId(sub.id)}
                     onClick={() => setPreviewCliId(sub.id)}
                     className={cx(
-                      'flex w-full cursor-pointer flex-col gap-1 rounded-xl px-2.5 py-2 text-left transition-all',
+                      'flex w-full cursor-pointer flex-col justify-center gap-1.5 rounded-xl px-2.5 py-2 text-left transition-colors',
                       isPreview ? 'bg-white/[0.09] text-white' : 'text-zinc-300 hover:bg-white/[0.04]',
                       locked && 'opacity-55'
                     )}
@@ -752,23 +758,25 @@ export function SubscriptionComposer({
                       )}
                     </div>
 
-                    {!locked ? (
-                      <div className="h-1 w-full overflow-hidden rounded-full bg-white/[0.08]">
-                        <div
-                          className={cx(
-                            'h-full rounded-full',
-                            sub.limit.status === 'rejected'
-                              ? 'bg-red-500'
-                              : sub.limit.status === 'warning'
-                                ? 'bg-amber-500'
-                                : 'bg-emerald-500'
-                          )}
-                          style={{ width: `${Math.max(4, pct)}%` }}
-                        />
-                      </div>
-                    ) : (
-                      <span className="text-[10px] text-zinc-500">Not signed in</span>
-                    )}
+                    <div className="flex h-3.5 items-center">
+                      {!locked ? (
+                        <div className="h-1 w-full overflow-hidden rounded-full bg-white/[0.08]">
+                          <div
+                            className={cx(
+                              'h-full rounded-full',
+                              sub.limit.status === 'rejected'
+                                ? 'bg-red-500'
+                                : sub.limit.status === 'warning'
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                            )}
+                            style={{ width: `${Math.max(4, pct)}%` }}
+                          />
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-zinc-500">Not signed in</span>
+                      )}
+                    </div>
                   </button>
                 )
               })}
@@ -841,67 +849,73 @@ export function SubscriptionComposer({
 
             {/* Scrollable Deduplicated Base Models List */}
             <div className="flex-1 space-y-0.5 overflow-y-auto p-2">
-              {previewSub.models.map((m) => {
-                const locked = !previewSub.authenticated
-                const isSelected = previewSub.id === selectedCli && m.id === selectedModel
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    disabled={locked}
-                    onClick={() => {
-                      if (locked) return
-                      onSelectCliModel(previewSub.id, m.id)
-                      if (m.efforts?.length && !m.efforts.includes(selectedEffort)) {
-                        onChangeEffort(m.defaultEffort || m.efforts[m.efforts.length - 1])
-                      }
-                      setOpenMenu(null)
-                    }}
-                    className={cx(
-                      'flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left transition-colors',
-                      locked
-                        ? 'cursor-not-allowed opacity-40'
-                        : isSelected
-                          ? 'cursor-pointer bg-indigo-500/20 text-white'
-                          : 'cursor-pointer text-zinc-200 hover:bg-white/[0.07]'
-                    )}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        {locked && <Lock size={11} className="shrink-0 text-zinc-500" />}
-                        <span className="truncate text-[13px] font-medium">{m.name}</span>
-                        {m.tier && (
-                          <span className="rounded bg-white/[0.07] px-1.5 py-0.2 text-[10px] text-zinc-400">
-                            {m.tier}
-                          </span>
+              {previewSub.models.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center p-6 text-center text-zinc-500">
+                  <p className="text-[12px]">{previewSub.statusReason || 'Not signed in or installed'}</p>
+                </div>
+              ) : (
+                previewSub.models.map((m) => {
+                  const locked = !previewSub.authenticated
+                  const isSelected = previewSub.id === selectedCli && m.id === selectedModel
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      disabled={locked}
+                      onClick={() => {
+                        if (locked) return
+                        onSelectCliModel(previewSub.id, m.id)
+                        if (m.efforts?.length && !m.efforts.includes(selectedEffort)) {
+                          onChangeEffort(m.defaultEffort || m.efforts[m.efforts.length - 1])
+                        }
+                        setOpenMenu(null)
+                      }}
+                      className={cx(
+                        'flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left transition-colors',
+                        locked
+                          ? 'cursor-not-allowed opacity-40'
+                          : isSelected
+                            ? 'cursor-pointer bg-indigo-500/20 text-white'
+                            : 'cursor-pointer text-zinc-200 hover:bg-white/[0.07]'
+                      )}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          {locked && <Lock size={11} className="shrink-0 text-zinc-500" />}
+                          <span className="truncate text-[13px] font-medium">{m.name}</span>
+                          {m.tier && (
+                            <span className="rounded bg-white/[0.07] px-1.5 py-0.2 text-[10px] text-zinc-400">
+                              {m.tier}
+                            </span>
+                          )}
+                        </div>
+                        {m.description && (
+                          <p className="mt-0.5 truncate text-[11px] text-zinc-500">{m.description}</p>
                         )}
                       </div>
-                      {m.description && (
-                        <p className="mt-0.5 truncate text-[11px] text-zinc-500">{m.description}</p>
-                      )}
-                    </div>
-                    {(() => {
-                      const tight = (previewSub.limit.modelBuckets ?? [])
-                        .filter((b) => b.modelIds.includes(m.id))
-                        .sort((a, b) => b.utilizationPct - a.utilizationPct)[0]
-                      if (!tight || locked) return null
-                      const left = 100 - tight.utilizationPct
-                      return (
-                        <span
-                          title={`${tight.label} · ${tight.resetInLabel}`}
-                          className={cx(
-                            'shrink-0 rounded-full px-1.5 py-0.2 font-mono text-[10px]',
-                            left <= 0 ? 'bg-red-500/20 text-red-300' : left <= 20 ? 'bg-amber-500/20 text-amber-300' : 'bg-white/[0.07] text-zinc-400'
-                          )}
-                        >
-                          {left}% left
-                        </span>
-                      )
-                    })()}
-                    {isSelected && !locked && <Check size={14} className="shrink-0 text-indigo-400" />}
-                  </button>
-                )
-              })}
+                      {(() => {
+                        const tight = (previewSub.limit.modelBuckets ?? [])
+                          .filter((b) => b.modelIds.includes(m.id))
+                          .sort((a, b) => b.utilizationPct - a.utilizationPct)[0]
+                        if (!tight || locked) return null
+                        const left = 100 - tight.utilizationPct
+                        return (
+                          <span
+                            title={`${tight.label} · ${tight.resetInLabel}`}
+                            className={cx(
+                              'shrink-0 rounded-full px-1.5 py-0.2 font-mono text-[10px]',
+                              left <= 0 ? 'bg-red-500/20 text-red-300' : left <= 20 ? 'bg-amber-500/20 text-amber-300' : 'bg-white/[0.07] text-zinc-400'
+                            )}
+                          >
+                            {left}% left
+                          </span>
+                        )
+                      })()}
+                      {isSelected && !locked && <Check size={14} className="shrink-0 text-indigo-400" />}
+                    </button>
+                  )
+                })
+              )}
             </div>
           </div>
         </div>

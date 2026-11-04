@@ -3,3 +3,4 @@ out
 release
 data
 .DS_Store
+*.lnk

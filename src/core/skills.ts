@@ -12,7 +12,7 @@ function skillRoots(projectFolder?: string): { dir: string; native: CliId[]; sco
     { dir: join(home, '.claude', 'skills'), native: ['claude'], scope: 'user' },
     { dir: join(home, '.gemini', 'antigravity-cli', 'skills'), native: ['agy'], scope: 'user' },
     { dir: join(home, '.gemini', 'antigravity', 'skills'), native: ['agy'], scope: 'user' },
-    { dir: join(home, '.gemini', 'skills'), native: ['agy', 'gemini'], scope: 'user' },
+    { dir: join(home, '.gemini', 'skills'), native: ['agy'], scope: 'user' },
     { dir: join(home, '.codex', 'skills'), native: ['codex'], scope: 'user' },
     { dir: join(home, '.copilot', 'skills'), native: ['copilot'], scope: 'user' }
   ]

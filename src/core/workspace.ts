@@ -58,7 +58,7 @@ const gitSync = (cwd: string, args: string[]): string => {
 
 // ───────────────────────────── Rules (CLAUDE.md / AGENTS.md / GEMINI.md / Copilot) ─────────────────────────────
 
-const RULE_FILES = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md', '.github/copilot-instructions.md'] as const
+const RULE_FILES = ['CLAUDE.md', 'AGENTS.md', '.github/copilot-instructions.md'] as const
 const START = '<!-- AI Hub rules: start (edited in AI Hub — shared by every AI) -->'
 const END = '<!-- AI Hub rules: end -->'
 
@@ -396,26 +396,26 @@ function parseDiff(diff: string): { header: string; hunks: DiffHunk[] } {
   return { header, hunks }
 }
 
-const fileDiff = (t: ProjectTask, file: string): string => {
+const fileDiff = (t: ProjectTask, file: string): Promise<string> => {
   const cwd = taskCwd(t)
-  return gitSync(cwd, ['diff', t.base_commit || 'HEAD', '--', file])
+  return runAsync('git', ['-C', cwd, 'diff', t.base_commit || 'HEAD', '--', file], cwd, undefined, 60_000)
 }
 
 export const review = {
-  hunks: (taskId: number, file: string): DiffHunk[] => {
+  hunks: async (taskId: number, file: string): Promise<DiffHunk[]> => {
     const t = task(taskId)
     try {
-      return parseDiff(fileDiff(t, file)).hunks
+      return parseDiff(await fileDiff(t, file)).hunks
     } catch {
       return []
     }
   },
 
   /** Reject one hunk (undo just that change in the working tree); the rest of the file is kept. */
-  revertHunk: (taskId: number, file: string, index: number): DiffHunk[] => {
+  revertHunk: async (taskId: number, file: string, index: number): Promise<DiffHunk[]> => {
     const t = task(taskId)
     const cwd = taskCwd(t)
-    const diff = fileDiff(t, file)
+    const diff = await fileDiff(t, file)
     const { header, hunks } = parseDiff(diff)
     const h = hunks[index]
     if (!h) throw new Error('That change no longer exists — refresh the diff')

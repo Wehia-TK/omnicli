@@ -7,7 +7,7 @@ import { findCliExecutable } from './clis'
 
 /**
  * One MCP server list for every CLI. Claude and Antigravity are changed through their own `mcp add/remove`
- * commands; Codex (config.toml), Gemini (settings.json) and Copilot (mcp-config.json) are edited in place,
+ * commands; Codex (config.toml) and Copilot (mcp-config.json) are edited in place,
  * touching only their MCP section.
  */
 
@@ -16,7 +16,6 @@ type Def = Omit<McpServerEntry, 'installedIn'>
 const home = homedir()
 const PATHS = {
   claude: join(home, '.claude.json'),
-  gemini: join(home, '.gemini', 'settings.json'),
   copilot: join(home, '.copilot', 'mcp-config.json'),
   codex: join(home, '.codex', 'config.toml')
 }
@@ -133,7 +132,6 @@ export const mcp = {
       ['claude', fromJsonMap(readJson(PATHS.claude).mcpServers)],
       ['agy', await listAgy()],
       ['codex', readCodexToml()],
-      ['gemini', fromJsonMap(readJson(PATHS.gemini).mcpServers)],
       ['copilot', fromJsonMap(readJson(PATHS.copilot).mcpServers)]
     ]
     const merged = new Map<string, McpServerEntry>()
@@ -170,7 +168,6 @@ export const mcp = {
           const envFlags = Object.entries(def.env ?? {}).flatMap(([k, v]) => ['--env', `${k}=${v}`])
           await exec(exe, ['mcp', 'add', ...envFlags, name, ...(def.type === 'http' ? [def.url!] : ['--', def.command!, ...(def.args ?? [])])])
         } else if (cli === 'codex') writeCodex(def, name)
-        else if (cli === 'gemini') writeJsonMap(PATHS.gemini, 'mcpServers', def, name)
         else if (cli === 'copilot') writeJsonMap(PATHS.copilot, 'mcpServers', def, name)
       } catch (e) {
         errors.push(`${cli}: ${(e as Error).message}`)
@@ -190,7 +187,6 @@ export const mcp = {
           const exe = findCliExecutable('agy')
           if (exe) await exec(exe, ['mcp', 'remove', name])
         } else if (cli === 'codex') writeCodex(null, name)
-        else if (cli === 'gemini') writeJsonMap(PATHS.gemini, 'mcpServers', null, name)
         else if (cli === 'copilot') writeJsonMap(PATHS.copilot, 'mcpServers', null, name)
       } catch {
         // already gone

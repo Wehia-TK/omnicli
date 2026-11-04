@@ -1,4 +1,4 @@
-export type CliId = 'claude' | 'agy' | 'codex' | 'gemini' | 'copilot'
+export type CliId = 'claude' | 'agy' | 'codex' | 'copilot'
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -130,7 +130,7 @@ export interface SkillInfo {
   /** Absolute path to SKILL.md */
   path: string
   /** Which CLI natively loads this skill (can be invoked as /name) */
-  native: ('claude' | 'agy' | 'codex' | 'gemini' | 'copilot')[]
+  native: CliId[]
   scope: 'user' | 'project'
 }
 
@@ -282,12 +282,10 @@ export interface Settings {
   claudePath: string
   agyPath: string
   codexPath: string
-  geminiPath: string
   copilotPath: string
   claudeTier: 'pro' | 'max5x' | 'max20x'
   agyTier: 'standard' | 'pro'
   codexTier: 'plus' | 'pro'
-  geminiTier: 'standard' | 'advanced'
   copilotTier: 'pro' | 'enterprise'
 }
 
@@ -296,4 +294,28 @@ export interface TerminalOutputEvent {
   data: string
   stream: 'stdout' | 'stderr' | 'system'
   exitCode?: number | null
+}
+
+/** Result of checking whether the running AI Hub is behind its source checkout. */
+export interface UpdateInfo {
+  /** false = can't self-update (installed build, no git checkout) — see `reason` */
+  supported: boolean
+  /** something changed that needs a restart (or a pull) to take effect */
+  available: boolean
+  checkedAt: number
+  launchedAt: number
+  branch: string
+  /** short HEAD hash */
+  commit: string
+  /** commits made since AI Hub was launched */
+  localCommits: { hash: string; subject: string }[]
+  /** files edited since launch that need a restart (main / preload / core / shared / package files) */
+  changedFiles: string[]
+  /** renderer files edited since launch — already live via hot reload */
+  liveFiles: string[]
+  /** upstream commits not yet pulled */
+  remoteCommits: { hash: string; subject: string }[]
+  /** upstream ref, e.g. origin/main ('' when none) */
+  remote: string
+  reason: string
 }

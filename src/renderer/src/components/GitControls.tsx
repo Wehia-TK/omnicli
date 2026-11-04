@@ -6,7 +6,7 @@ import { cx } from './ui'
 
 /** Project-header git actions: one click to init a repo, one click to push to a remembered repository link. */
 export function GitControls({ project }: { project: Project }): React.JSX.Element | null {
-  const { data: status, reload } = useData(() => api.git.status(project.id).catch(() => null), [project.id, project.folder])
+  const { data: status, reload } = useData(() => api.git.status(project.id).catch(() => null), [project.id, project.folder], { throttleMs: 4000 })
   const [open, setOpen] = useState(false)
   const [editingUrl, setEditingUrl] = useState(false)
   const [url, setUrl] = useState('')

@@ -91,7 +91,7 @@ export function LiveLimitsModal({
   onRefresh: () => void
   onClose: () => void
 }): React.JSX.Element {
-  const { data: recent } = useData(() => api.clis.recentUsage())
+  const { data: recent } = useData(() => api.clis.recentUsage(), [], { throttleMs: 2000 })
 
   const updateSetting = (patch: Partial<Settings>): void => {
     act(api.settings.update(patch), 'Saved')

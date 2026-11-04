@@ -43,14 +43,36 @@ function tick(): void {
   }
 }
 
-/** Push a notification to your phone through ntfy.sh (only when a topic is set in Settings). */
-export function phoneNotify(title: string, body: string): void {
-  const topic = getSettings().ntfyTopic.trim()
-  if (!topic) return
-  const url = /^https?:\/\//.test(topic) ? topic : `https://ntfy.sh/${encodeURIComponent(topic)}`
-  fetch(url, { method: 'POST', body: body.slice(0, 1000), headers: { Title: title.slice(0, 200).replace(/[^\x20-\x7e]/g, ''), Tags: 'robot' } }).catch(() => undefined)
+/**
+ * Where to publish: accepts a bare topic ("my_topic"), "ntfy.sh/my_topic", or a full URL to any ntfy server
+ * ("https://ntfy.example.com/my_topic"). Returns null for anything that isn't a valid topic.
+ */
+export function ntfyTarget(raw: string): { server: string; topic: string } | null {
+  const m = raw.trim().match(/^(?:(https?):\/\/)?(?:([^/\s]+)\/)?([A-Za-z0-9_-]{1,64})\/?$/i)
+  if (!m) return null
+  const server = m[2] ? `${m[1] || 'https'}://${m[2]}` : 'https://ntfy.sh'
+  return { server, topic: m[3] }
 }
 
+/** Publish via ntfy's JSON API (UTF-8 safe titles, unlike HTTP headers). */
+async function publishNtfy(title: string, body: string): Promise<void> {
+  const raw = getSettings().ntfyTopic.trim()
+  if (!raw) return
+  const target = ntfyTarget(raw)
+  if (!target) throw new Error(`"${raw}" is not a valid ntfy topic (use letters, numbers, _ or -)`)
+  const res = await fetch(target.server, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic: target.topic, title: title.slice(0, 200), message: body.slice(0, 1000) || title, tags: ['robot'] }),
+    signal: AbortSignal.timeout(10_000)
+  })
+  if (!res.ok) throw new Error(`ntfy rejected the message (${res.status} ${res.statusText})`)
+}
+
+/** Push a notification to your phone through ntfy (only when a topic is set in Settings). Fire-and-forget. */
+export function phoneNotify(title: string, body: string): void {
+  publishNtfy(title, body).catch((e) => console.warn('[ntfy]', (e as Error).message))
+}
 export const schedules = {
   list: (projectId: number): Schedule[] => all<Schedule>('SELECT * FROM schedules WHERE project_id = ? ORDER BY id', projectId),
 
@@ -117,9 +139,9 @@ export const schedules = {
     return true
   },
 
-  testPhone: (): true => {
+  testPhone: async (): Promise<true> => {
     if (!getSettings().ntfyTopic.trim()) throw new Error('Set an ntfy topic in Settings first')
-    phoneNotify('AI Hub', 'Phone notifications are working.')
+    await publishNtfy('AI Hub', 'Phone notifications are working.')
     return true
   }
 }

@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { GitStatusInfo } from '@shared/types'
@@ -17,6 +17,15 @@ function gitSync(cwd: string, args: string[], allowFail = false): string {
   if (r.error) throw new Error((r.error as NodeJS.ErrnoException).code === 'ENOENT' ? 'Git is not installed or not on PATH' : r.error.message)
   if (r.status !== 0 && !allowFail) throw new Error((r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ') || `git ${args[0]} failed`)
   return r.status === 0 ? r.stdout : ''
+}
+
+/** Read-only git query that never blocks the main process; '' when git fails. */
+function gitQuiet(cwd: string, args: string[], timeoutMs = 30_000): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 }, (err, stdout) =>
+      resolve(err ? '' : stdout)
+    )
+  })
 }
 
 /** Long-running git (push) without blocking the main process; never waits on a terminal prompt. */
@@ -69,19 +78,26 @@ function normalizeRemote(raw: string): string {
 const DEFAULT_GITIGNORE = ['node_modules/', 'out/', 'dist/', 'build/', 'release/', '.env', '.env.*', '*.log', '.DS_Store', 'Thumbs.db', '.ai-kb/', 'graphify-out/', ''].join('\n')
 
 export const gitops = {
-  status: (projectId: number): GitStatusInfo => {
+  /** Polled by the header on every DB change — runs git without blocking the main process. */
+  status: async (projectId: number): Promise<GitStatusInfo> => {
     const { folder, url } = getFolder(projectId)
     const empty: GitStatusInfo = { isRepo: false, branch: '', hasCommits: false, dirtyFiles: 0, remoteUrl: '', savedRemoteUrl: url, ahead: 0, behind: 0, upstream: '' }
-    if (!isRepo(folder)) return empty
-    const hasCommits = Boolean(gitSync(folder, ['rev-parse', '--verify', 'HEAD'], true).trim())
-    const branch = gitSync(folder, ['symbolic-ref', '--short', 'HEAD'], true).trim() || gitSync(folder, ['rev-parse', '--abbrev-ref', 'HEAD'], true).trim()
-    const dirtyFiles = gitSync(folder, ['status', '--porcelain'], true).split('\n').filter(Boolean).length
-    const remoteUrl = gitSync(folder, ['remote', 'get-url', 'origin'], true).trim()
-    const upstream = hasCommits ? gitSync(folder, ['rev-parse', '--abbrev-ref', '@{u}'], true).trim() : ''
+    if ((await gitQuiet(folder, ['rev-parse', '--is-inside-work-tree'])).trim() !== 'true') return empty
+    const [head, symbolic, porcelain, remoteRaw] = await Promise.all([
+      gitQuiet(folder, ['rev-parse', '--verify', 'HEAD']),
+      gitQuiet(folder, ['symbolic-ref', '--short', 'HEAD']),
+      gitQuiet(folder, ['status', '--porcelain']),
+      gitQuiet(folder, ['remote', 'get-url', 'origin'])
+    ])
+    const hasCommits = Boolean(head.trim())
+    const branch = symbolic.trim() || (await gitQuiet(folder, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+    const dirtyFiles = porcelain.split('\n').filter(Boolean).length
+    const remoteUrl = remoteRaw.trim()
+    const upstream = hasCommits ? (await gitQuiet(folder, ['rev-parse', '--abbrev-ref', '@{u}'])).trim() : ''
     let ahead = 0
     let behind = 0
     if (upstream) {
-      const [b, a] = gitSync(folder, ['rev-list', '--left-right', '--count', `${upstream}...HEAD`], true).trim().split(/\s+/).map(Number)
+      const [b, a] = (await gitQuiet(folder, ['rev-list', '--left-right', '--count', `${upstream}...HEAD`])).trim().split(/\s+/).map(Number)
       behind = b || 0
       ahead = a || 0
     }
@@ -89,7 +105,7 @@ export const gitops = {
   },
 
   /** `git init` on `main`, a sensible .gitignore if none exists, and an initial commit. */
-  init: (projectId: number): GitStatusInfo => {
+  init: async (projectId: number): Promise<GitStatusInfo> => {
     const { folder } = getFolder(projectId)
     if (isRepo(folder)) throw new Error('This folder is already a git repository')
     const r = spawnSync('git', ['-C', folder, 'init', '-b', 'main'], { encoding: 'utf8', windowsHide: true })
@@ -108,7 +124,7 @@ export const gitops = {
   },
 
   /** Remember a repository link for this project (kept until changed manually). */
-  setRemote: (projectId: number, url: string): GitStatusInfo => {
+  setRemote: async (projectId: number, url: string): Promise<GitStatusInfo> => {
     const clean = url.trim() ? normalizeRemote(url) : ''
     run('UPDATE projects SET git_remote_url = ? WHERE id = ?', clean, projectId)
     return gitops.status(projectId)
@@ -120,7 +136,7 @@ export const gitops = {
     const remote = normalizeRemote(url?.trim() || saved || gitSync(folder, ['remote', 'get-url', 'origin'], true).trim())
     run('UPDATE projects SET git_remote_url = ? WHERE id = ?', remote, projectId)
 
-    if (!isRepo(folder)) gitops.init(projectId)
+    if (!isRepo(folder)) await gitops.init(projectId)
     gitSync(folder, ['add', '-A'])
     if (gitSync(folder, ['status', '--porcelain'], true).trim()) {
       gitSync(folder, ['commit', '-m', message?.trim() || `Update from AI Hub (${nowLocal().replace('T', ' ')})`])
@@ -134,6 +150,6 @@ export const gitops = {
     const branch = gitSync(folder, ['symbolic-ref', '--short', 'HEAD'], true).trim() || 'main'
     await gitAsync(folder, ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`])
     run('UPDATE projects SET git_remote_url = git_remote_url WHERE id = ?', projectId) // notify UI
-    return { ...gitops.status(projectId), pushed: `${branch} → ${remote}` }
+    return { ...(await gitops.status(projectId)), pushed: `${branch} → ${remote}` }
   }
 }

@@ -9,7 +9,7 @@ export const DEFAULT_SETTINGS: Settings = {
   kbPromptMode: 'compact',
   useGraphify: true,
   graphifyWatch: true,
-  ntfyTopic: '',
+  ntfyTopic: '***REMOVED***',
   agyFamilyFallback: true,
   defaultPermissionMode: 'default',
   defaultCheckoutMode: 'local',
@@ -19,12 +19,10 @@ export const DEFAULT_SETTINGS: Settings = {
   claudePath: '',
   agyPath: '',
   codexPath: '',
-  geminiPath: '',
   copilotPath: '',
   claudeTier: 'pro',
   agyTier: 'pro',
   codexTier: 'plus',
-  geminiTier: 'advanced',
   copilotTier: 'pro'
 }
 
@@ -40,6 +38,7 @@ export function getSettings(): Settings {
       }
     }
   }
+  if (s.defaultCli === 'gemini') s.defaultCli = 'claude'
   return s as unknown as Settings
 }
 

@@ -106,7 +106,7 @@ export function ApprovalCards({ taskId }: { taskId: number }): React.JSX.Element
 
 export function PrButton({ task }: { task: ProjectTask }): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
-  const { data: pr, reload } = useData(() => (task.pr_url ? api.github.status(task.id).catch(() => null) : Promise.resolve(null)), [task.id, task.pr_url])
+  const { data: pr, reload } = useData(() => (task.pr_url ? api.github.status(task.id).catch(() => null) : Promise.resolve(null)), [task.id, task.pr_url], { throttleMs: 30_000 })
   if (task.checkout_mode !== 'worktree' || !task.branch) return null
   if (!task.pr_url) {
     return (
@@ -146,7 +146,7 @@ export function PrButton({ task }: { task: ProjectTask }): React.JSX.Element | n
 
 /** Side-by-side diff with per-change Undo and line comments that go back to the AI as one review. */
 export function DiffReview({ task, file, onSendReview }: { task: ProjectTask; file: string; onSendReview: (text: string) => void }): React.JSX.Element {
-  const { data: hunks, reload } = useData(() => api.review.hunks(task.id, file), [task.id, file, task.run_state])
+  const { data: hunks, reload } = useData(() => api.review.hunks(task.id, file), [task.id, file, task.run_state], { throttleMs: 2500 })
   const [comments, setComments] = useState<{ line: string; text: string }[]>([])
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
@@ -270,14 +270,14 @@ export function DiffReview({ task, file, onSendReview }: { task: ProjectTask; fi
 // ───────────────────────────── Rules editor ─────────────────────────────
 
 export function RulesModal({ project, onClose }: { project: Project; onClose: () => void }): React.JSX.Element {
-  const { data } = useData(() => api.rules.get(project.id), [project.id])
+  const { data } = useData(() => api.rules.get(project.id), [project.id], { throttleMs: 5000 })
   const [text, setText] = useState<string | null>(null)
-  const [targets, setTargets] = useState<string[]>(['CLAUDE.md', 'AGENTS.md', 'GEMINI.md', '.github/copilot-instructions.md'])
+  const [targets, setTargets] = useState<string[]>(['CLAUDE.md', 'AGENTS.md', '.github/copilot-instructions.md'])
   const value = text ?? data?.text ?? ''
   const label: Record<string, string> = {
     'CLAUDE.md': 'Claude Code',
     'AGENTS.md': 'Codex · Antigravity',
-    'GEMINI.md': 'Gemini CLI',
+  //
     '.github/copilot-instructions.md': 'GitHub Copilot'
   }
   return (
@@ -544,13 +544,14 @@ export function SchedulesPanel({ project, clis, cli, model }: { project: Project
 const MCP_TARGETS: { id: CliId; label: string }[] = [
   { id: 'claude', label: 'Claude' },
   { id: 'agy', label: 'Antigravity' },
-  { id: 'codex', label: 'Codex' },
-  { id: 'gemini', label: 'Gemini' },
-  { id: 'copilot', label: 'Copilot' }
+  { id: 'codex', label: 'Codex' }, { id: 'copilot', label: 'Copilot' }
+  //
+  //
+  //
 ]
 
 export function McpModal({ clis, onClose }: { clis: CliSubscriptionStatus[]; onClose: () => void }): React.JSX.Element {
-  const { data: list, reload } = useData(() => api.mcp.list(), [])
+  const { data: list, reload } = useData(() => api.mcp.list(), [], { throttleMs: 15_000 })
   const installed = clis.filter((c) => c.installed).map((c) => c.id)
   const [form, setForm] = useState<{ name: string; type: 'stdio' | 'http'; command: string; url: string; env: string; targets: CliId[] } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -789,7 +790,7 @@ export function BrowserPreview({ project, onPick }: { project: Project; onPick: 
 
 /** Thumbnail of an attached image; click to see it full size. */
 export function ImageThumb({ path, size = 28, label }: { path: string; size?: number; label?: string }): React.JSX.Element {
-  const { data: src } = useData(() => api.attachments.readImage(path).catch(() => ''), [path])
+  const { data: src } = useData(() => api.attachments.readImage(path).catch(() => ''), [path], { throttleMs: 60_000 })
   const [open, setOpen] = useState(false)
   return (
     <>
@@ -834,7 +835,7 @@ const SKILL_TARGETS: { id: CliId; label: string }[] = [
 ]
 
 export function SkillsModal({ projectId, clis, onClose }: { projectId?: number; clis: CliSubscriptionStatus[]; onClose: () => void }): React.JSX.Element {
-  const { data: skills, reload } = useData(() => api.skills.list(projectId), [projectId])
+  const { data: skills, reload } = useData(() => api.skills.list(projectId), [projectId], { throttleMs: 15_000 })
   const installedClis = clis.filter((c) => c.installed).map((c) => c.id)
   const [filter, setFilter] = useState('')
   const [url, setUrl] = useState('')

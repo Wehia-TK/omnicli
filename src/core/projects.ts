@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type { CheckoutMode, CliId, EffortLevel, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, TaskChanges } from '@shared/types'
@@ -78,6 +78,23 @@ function git(cwd: string, args: string[]): string {
   if (r.error) throw new Error((r.error as NodeJS.ErrnoException).code === 'ENOENT' ? 'Git is not installed or not on PATH' : r.error.message)
   if (r.status !== 0) throw new Error((r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ') || `git ${args[0]} failed`)
   return r.stdout
+}
+
+/** Non-blocking git for read-only UI queries (polled on every DB change — spawnSync here froze the app). */
+function gitAsync(cwd: string, args: string[], timeoutMs = 60_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'git',
+      ['-C', cwd, ...args],
+      { encoding: 'utf8', windowsHide: true, timeout: timeoutMs, maxBuffer: 50 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const code = (err as NodeJS.ErrnoException).code
+          reject(new Error(code === 'ENOENT' ? 'Git is not installed or not on PATH' : (stderr || stdout || err.message).trim().split('\n').slice(-3).join(' ')))
+        } else resolve(stdout)
+      }
+    )
+  })
 }
 
 const logFile = (id: number): string => join(logDir, `task-${id}.log`)
@@ -193,17 +210,17 @@ const RUN_LIMIT_MS = 30 * 60_000
 const CHECK_LIMIT_MS = 15 * 60_000
 
 const cliDisplayName = (c: CliId): string =>
-  c === 'agy' ? 'Antigravity' : c === 'claude' ? 'Claude Code' : c === 'codex' ? 'OpenAI Codex' : c === 'gemini' ? 'Gemini CLI' : 'GitHub Copilot'
+  c === 'agy' ? 'Antigravity' : c === 'claude' ? 'Claude Code' : c === 'codex' ? 'OpenAI Codex' : 'GitHub Copilot'
 
 function resolveCliFor(t: ProjectTask, p: Project): CliId {
-  return (t.cli || p.default_cli || getSettings().defaultCli || 'claude') as CliId
+  const raw = (t.cli || p.default_cli || getSettings().defaultCli || 'claude') as string
+  return (raw === 'gemini' ? 'claude' : raw) as CliId
 }
 
 const FALLBACK_MODEL: Record<CliId, string> = {
   claude: 'claude-opus-5-5',
   agy: 'gemini-4-argon',
   codex: 'gpt-5.2-codex',
-  gemini: 'gemini-4-argon',
   copilot: 'claude-sonnet-5-5'
 }
 
@@ -253,9 +270,8 @@ function formatMentionsContext(mentionsRaw: string, projectFolder: string, cli: 
     } else if (m.type === 'kb') {
       parts.push(`Referenced Knowledge Base Entry (@${m.label}):\n${m.value}`)
     } else if (m.type === 'image') {
-      // Codex gets images via --image; Gemini expands @path; Claude/Antigravity open the file with their read tool
-      if (cli === 'gemini') parts.push(`Attached image: @${m.value}`)
-      else if (cli !== 'codex') parts.push(`Attached image (open and look at it before answering): ${m.value}`)
+      // Codex gets images via --image; Claude/Antigravity open the file with their read tool
+      if (cli !== 'codex') parts.push(`Attached image (open and look at it before answering): ${m.value}`)
     } else if (m.type === 'element') {
       parts.push(`Selected element from the app preview (${m.label}):\n${m.value}`)
     }
@@ -388,8 +404,16 @@ export function turnedDownByLimit(rejected: boolean, text: string): boolean {
 
 function collectChangedFilePaths(t: ProjectTask): string[] {
   try {
-    const ch = projects.changes(t.id)
-    return ch ? ch.files.map((f) => f.path) : []
+    const p = getProject(t.project_id)
+    const cwd = t.worktree && existsSync(t.worktree) ? t.worktree : p.folder && existsSync(p.folder) ? p.folder : ''
+    if (!cwd) return []
+    const files = git(cwd, ['diff', '--name-only', t.base_commit || 'HEAD']).split('\n').map((l) => l.trim()).filter(Boolean)
+    for (const l of git(cwd, ['status', '--porcelain']).split('\n')) {
+      if (!l.startsWith('??')) continue
+      const pth = l.slice(3).trim()
+      if (pth && !files.includes(pth)) files.push(pth)
+    }
+    return files
   } catch {
     return []
   }
@@ -732,7 +756,7 @@ function localizeAttachments(t: ProjectTask, cwd: string): ProjectTask {
   return getTask(t.id)
 }
 
-/** Launch Antigravity CLI (`agy`) or the other supported CLIs (`codex`, `gemini`, `copilot`). */
+/** Launch Antigravity CLI (`agy`) or the other supported CLIs (`codex`, `copilot`). */
 function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: string, firstWhy: string): void {
   const cwd = resolveWorkingDir(startTask, p)
   const t = localizeAttachments(getTask(startTask.id), cwd)
@@ -773,10 +797,6 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     const common = ['--json', '--skip-git-repo-check', '--model', model, '-c', `model_reasoning_effort="${effortArg}"`, ...sandbox]
     const images = imageMentions(t.mentions).flatMap((f) => ['--image', f])
     args = t.codex_thread && t.runner === 'codex' ? ['exec', 'resume', ...common, ...images, t.codex_thread, '-'] : ['exec', ...common, ...images, '-']
-    stdinPrompt = prompt
-  } else if (cli === 'gemini') {
-    const approval = t.permission_mode === 'plan' ? 'default' : t.permission_mode === 'bypass' ? 'yolo' : 'auto_edit'
-    args = ['--output-format', 'json', '--approval-mode', approval, '--model', model, '-p', ' ']
     stdinPrompt = prompt
   } else {
     args = ['-p', prompt.slice(0, 24_000), '--model', model]
@@ -949,25 +969,6 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     running.delete(t.id)
     const durationMs = Date.now() - startedAt
 
-    // Gemini CLI `--output-format json` prints one object with the answer and token stats
-    if (cli === 'gemini') {
-      try {
-        const j = JSON.parse(outText.slice(outText.indexOf('{'))) as {
-          response?: string
-          error?: { message?: string }
-          stats?: { models?: Record<string, { tokens?: { total?: number; prompt?: number; candidates?: number; cached?: number } }> }
-        }
-        if (j.response) outText = j.response
-        if (j.error?.message) ((streamOk = false), (errorText += j.error.message))
-        for (const m of Object.values(j.stats?.models ?? {})) {
-          const tk = m.tokens ?? {}
-          streamTokens += tk.total ? tk.total - (tk.cached ?? 0) : (tk.prompt ?? 0) + (tk.candidates ?? 0)
-        }
-      } catch {
-        // plain text output
-      }
-    }
-
     const tid = getTask(t.id)
     const realAgyTokens = isAgy && tid.agy_conversation ? agyConversationTokens(tid.agy_conversation, startedAt) : 0
     const finalTokens = realAgyTokens || streamTokens || Math.max(800, Math.round((prompt.length + outText.length) / 3.5))
@@ -1077,7 +1078,7 @@ function handleStoppedRun(from: CliId, t: ProjectTask, p: Project, ask: string, 
 
 function handOverToOtherCli(from: CliId, t: ProjectTask, p: Project, ask: string, why: string, firstWhy: string): void {
   // Only hand over to subscriptions that are installed AND signed in; Claude first, then the rest
-  const fallbackOrder: CliId[] = ['claude', 'agy', 'codex', 'gemini', 'copilot']
+  const fallbackOrder: CliId[] = ['claude', 'agy', 'codex', 'copilot']
   const to = fallbackOrder.find((c) => c !== from && isCliReady(c))
 
   if (firstWhy || !to || !getSettings().cliHandover) {
@@ -1503,52 +1504,44 @@ export const projects = {
     }
   },
 
-  changes: (id: number): TaskChanges | null => {
+  changes: async (id: number): Promise<TaskChanges | null> => {
     const t = getTask(id)
     const p = getProject(t.project_id)
     const cwd = t.worktree && existsSync(t.worktree) ? t.worktree : p.folder && existsSync(p.folder) ? p.folder : ''
     if (!cwd) return null
     try {
-      git(cwd, ['rev-parse', '--is-inside-work-tree'])
+      await gitAsync(cwd, ['rev-parse', '--is-inside-work-tree'])
     } catch {
       return null
     }
 
     const base = t.base_commit || 'HEAD'
-    let commits: { hash: string; subject: string }[] = []
-    if (t.base_commit) {
-      try {
-        commits = git(cwd, ['log', '--format=%h%x09%s', `${t.base_commit}..HEAD`])
-          .split('\n')
-          .filter(Boolean)
-          .map((l) => ({ hash: l.split('\t')[0], subject: l.split('\t').slice(1).join('\t') }))
-      } catch {
-        commits = []
-      }
-    }
+    const [logOut, numstatOut, nameStatusOut, statusOut] = await Promise.all([
+      t.base_commit ? gitAsync(cwd, ['log', '--format=%h%x09%s', `${t.base_commit}..HEAD`]).catch(() => '') : Promise.resolve(''),
+      gitAsync(cwd, ['diff', '--numstat', base]).catch(() => ''),
+      gitAsync(cwd, ['diff', '--name-status', base]).catch(() => ''),
+      gitAsync(cwd, ['status', '--porcelain'])
+    ])
+
+    const commits: { hash: string; subject: string }[] = logOut
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => ({ hash: l.split('\t')[0], subject: l.split('\t').slice(1).join('\t') }))
 
     const counts = new Map<string, { added: number; removed: number }>()
-    try {
-      for (const l of git(cwd, ['diff', '--numstat', base]).split('\n').filter(Boolean)) {
-        const [a, r, ...path] = l.split('\t')
-        counts.set(path.join('\t'), { added: Number(a) || 0, removed: Number(r) || 0 })
-      }
-    } catch {
-      // ignore
+    for (const l of numstatOut.split('\n').filter(Boolean)) {
+      const [a, r, ...path] = l.split('\t')
+      counts.set(path.join('\t'), { added: Number(a) || 0, removed: Number(r) || 0 })
     }
 
     const files: TaskChanges['files'] = []
-    try {
-      for (const l of git(cwd, ['diff', '--name-status', base]).split('\n').filter(Boolean)) {
-        const [status, ...rest] = l.split('\t')
-        const path = rest[rest.length - 1]
-        files.push({ path, status: status[0], ...(counts.get(path) ?? { added: 0, removed: 0 }) })
-      }
-    } catch {
-      // ignore
+    for (const l of nameStatusOut.split('\n').filter(Boolean)) {
+      const [status, ...rest] = l.split('\t')
+      const path = rest[rest.length - 1]
+      files.push({ path, status: status[0], ...(counts.get(path) ?? { added: 0, removed: 0 }) })
     }
 
-    const statusLines = git(cwd, ['status', '--porcelain']).split('\n').filter(Boolean)
+    const statusLines = statusOut.split('\n').filter(Boolean)
     for (const l of statusLines.filter((x) => x.startsWith('??'))) {
       const pth = l.slice(3).trim()
       if (!files.some((f) => f.path === pth)) {
@@ -1564,13 +1557,13 @@ export const projects = {
     }
   },
 
-  diff: (id: number, file: string): string => {
+  diff: async (id: number, file: string): Promise<string> => {
     const t = getTask(id)
     const p = getProject(t.project_id)
     const cwd = t.worktree && existsSync(t.worktree) ? t.worktree : p.folder
     if (!cwd || !existsSync(cwd)) return ''
     try {
-      const out = git(cwd, ['diff', t.base_commit || 'HEAD', '--', file])
+      const out = await gitAsync(cwd, ['diff', t.base_commit || 'HEAD', '--', file])
       if (out) return out
     } catch {
       // fallback to reading file

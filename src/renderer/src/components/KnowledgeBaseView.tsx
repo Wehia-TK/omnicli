@@ -48,7 +48,7 @@ export function KnowledgeBaseView({ project, entries }: KnowledgeBaseViewProps):
           </div>
           <p className="muted max-w-2xl text-[12.5px]">
             Pinned entries are synced to disk and shared (compactly, to save tokens) with every session across{' '}
-            <strong className="text-zinc-200">Claude Code, Antigravity, Codex, Gemini, and Copilot</strong>. When one AI
+            <strong className="text-zinc-200">Claude Code, Antigravity, Codex, and Copilot</strong>. When one AI
             completes a task or hits a rate limit, its handoff summary is recorded here so the next AI picks up seamlessly.
           </p>
         </div>
@@ -313,7 +313,7 @@ function KnowledgeModal({
             onChange={(e) => setPinned(e.target.checked ? 1 : 0)}
             className="accent-indigo-500"
           />
-          Pin to prompt context (automatically sent to Claude, Antigravity, Codex, Gemini, and Copilot)
+          Pin to prompt context (automatically sent to Claude, Antigravity, Codex, and Copilot)
         </label>
       </div>
     </Modal>

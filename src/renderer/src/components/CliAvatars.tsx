@@ -59,21 +59,6 @@ function CodexAvatar({ size }: { size: number }): React.JSX.Element {
   )
 }
 
-function GeminiAvatar({ size }: { size: number }): React.JSX.Element {
-  const id = useId()
-  return (
-    <svg className="shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <defs>
-        <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#60a5fa" />
-          <stop offset="1" stopColor="#c084fc" />
-        </linearGradient>
-      </defs>
-      <path d="M12 2C12 7.5 16.5 12 22 12C16.5 12 12 16.5 12 22C12 16.5 7.5 12 2 12C7.5 12 12 7.5 12 2Z" fill={`url(#${id})`} />
-    </svg>
-  )
-}
-
 function CopilotAvatar({ size }: { size: number }): React.JSX.Element {
   return (
     <svg className="shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none">
@@ -88,7 +73,6 @@ export function CliAvatar({ cli, size = 18 }: { cli: CliId; size?: number }): Re
   if (cli === 'agy') return <AgyAvatar size={size} />
   if (cli === 'claude') return <ClaudeAvatar size={size} />
   if (cli === 'codex') return <CodexAvatar size={size} />
-  if (cli === 'gemini') return <GeminiAvatar size={size} />
   return <CopilotAvatar size={size} />
 }
 

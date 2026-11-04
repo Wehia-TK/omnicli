@@ -12,7 +12,6 @@ import {
   FolderOpen,
   GitBranch,
   GitMerge,
-  Layers,
   ListChecks,
   ListStart,
   Loader2,
@@ -49,6 +48,9 @@ import { ApprovalCards, BrowserPreview, DiffReview, ImageThumb, McpModal, PrButt
 import { attachToComposer } from './components/SubscriptionComposer'
 import { Download, Globe, Plug, ScrollText, Search, ShieldCheck as ShieldOk, Wand2 } from 'lucide-react'
 import { KnowledgeBaseView } from './components/KnowledgeBaseView'
+import { UpdateButton } from './components/UpdateButton'
+import { WindowControls } from './components/WindowControls'
+import appLogo from './assets/logo.png'
 import { LiveLimitsModal, SubscriptionStatusStrip } from './components/LiveLimitsModal'
 import { SubscriptionComposer } from './components/SubscriptionComposer'
 import { confirmAction, cx, Field, Modal } from './components/ui'
@@ -63,7 +65,7 @@ const fmtDuration = (ms: number): string =>
 
 export default function App(): React.JSX.Element {
   const { data: projectsList } = useData(() => api.projects.list())
-  const { data: clis, reload: reloadClis } = useData(() => api.clis.statusAll())
+  const { data: clis, reload: reloadClis } = useData(() => api.clis.statusAll(), [], { throttleMs: 5000 })
   const { data: settings } = useData(() => api.settings.get())
   const toasts = useToasts()
 
@@ -182,7 +184,7 @@ export default function App(): React.JSX.Element {
     rememberChoice({ effort: e })
   }
 
-  const { data: skillsList } = useData(() => api.skills.list(currentProject?.id).catch(() => []), [currentProject?.id])
+  const { data: skillsList } = useData(() => api.skills.list(currentProject?.id).catch(() => []), [currentProject?.id], { throttleMs: 15_000 })
 
   const { data: tasks } = useData(
     () => (currentProject ? api.projects.tasks(currentProject.id) : Promise.resolve([])),
@@ -194,7 +196,8 @@ export default function App(): React.JSX.Element {
   )
   const { data: projectFiles } = useData(
     () => (currentProject ? api.projects.files(currentProject.id) : Promise.resolve([])),
-    [currentProject?.id]
+    [currentProject?.id],
+    { throttleMs: 10_000 }
   )
 
   const activeTask = (tasks ?? []).find((t) => t.id === activeTaskId) ?? null
@@ -289,66 +292,75 @@ export default function App(): React.JSX.Element {
     <div className="dark flex h-screen w-screen flex-col overflow-hidden text-zinc-100">
       {/* Custom Top Title Bar */}
       <header
-        className="glass-bar flex h-10 shrink-0 items-center justify-between border-b pr-[145px] pl-3.5 select-none"
+        className="glass-bar flex h-10 shrink-0 items-center justify-between border-b pl-3.5 select-none"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        onDoubleClick={(e) => {
+          if ((e.target as HTMLElement).closest('button, input, a, [data-no-drag]')) return
+          api.window.maximize().catch(() => {})
+        }}
       >
         <div className="flex items-center gap-2.5">
-          <div className="flex size-5 items-center justify-center rounded-md bg-accent text-white shadow-[0_2px_8px_rgba(99,102,241,0.45)]">
-            <Layers size={12} />
-          </div>
+          <img src={appLogo} alt="" draggable={false} className="size-6 rounded-md shadow-[0_2px_10px_rgba(139,92,246,0.4)]" />
           <span className="text-[13px] font-semibold tracking-tight text-zinc-100">AI Hub</span>
         </div>
 
-        {/* Live Subscription Status Strip in TitleBar */}
-        <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <SubscriptionStatusStrip
-            clis={clis ?? []}
-            selectedCli={selectedCli}
-            onSelectCli={(sub) => {
-              setSelectedCli(sub.id)
-              if (sub.models[0]) setSelectedModel(sub.models[0].id)
-            }}
-            onOpenLimitsModal={() => setShowLimitsModal(true)}
-          />
+        {/* Live Subscription Status Strip, Actions & Custom Window Controls */}
+        <div className="flex h-full items-center gap-2">
+          <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            <SubscriptionStatusStrip
+              clis={clis ?? []}
+              selectedCli={selectedCli}
+              onSelectCli={(sub) => {
+                setSelectedCli(sub.id)
+                if (sub.models[0]) setSelectedModel(sub.models[0].id)
+              }}
+              onOpenLimitsModal={() => setShowLimitsModal(true)}
+            />
 
-          <div className="h-4 w-px bg-white/[0.08]" />
+            <div className="h-4 w-px bg-white/[0.08]" />
 
-          <button
-            type="button"
-            onClick={() => setShowTerminal(!showTerminal)}
-            className={cx(
-              'btn h-7 px-2.5 text-[11.5px]',
-              showTerminal && 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
-            )}
-            title="Toggle Embedded CLI Terminal"
-          >
-            <Terminal size={12} /> Terminal
-          </button>
+            <button
+              type="button"
+              onClick={() => setShowTerminal(!showTerminal)}
+              className={cx(
+                'btn h-7 px-2.5 text-[11.5px]',
+                showTerminal && 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
+              )}
+              title="Toggle Embedded CLI Terminal"
+            >
+              <Terminal size={12} /> Terminal
+            </button>
 
-          <button type="button" onClick={() => setShowSearch(true)} className="btn btn-ghost btn-icon h-7 w-7" title="Search all sessions (Ctrl+K)">
-            <Search size={13} />
-          </button>
-          <button type="button" onClick={() => setShowSkills(true)} className="btn btn-ghost btn-icon h-7 w-7" title="Skills: browse yours and install from a link">
-            <Wand2 size={13} />
-          </button>
-          <button type="button" onClick={() => setShowMcp(true)} className="btn btn-ghost btn-icon h-7 w-7" title="MCP servers for every AI">
-            <Plug size={13} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowSettingsModal(true)}
-            className="btn btn-ghost btn-icon h-7 w-7"
-            title="Settings & CLI Paths"
-          >
-            <SettingsIcon size={13} />
-          </button>
+            <button type="button" onClick={() => setShowSearch(true)} className="btn btn-ghost btn-icon h-7 w-7" title="Search all sessions (Ctrl+K)">
+              <Search size={13} />
+            </button>
+            <button type="button" onClick={() => setShowSkills(true)} className="btn btn-ghost btn-icon h-7 w-7" title="Skills: browse yours and install from a link">
+              <Wand2 size={13} />
+            </button>
+            <button type="button" onClick={() => setShowMcp(true)} className="btn btn-ghost btn-icon h-7 w-7" title="MCP servers for every AI">
+              <Plug size={13} />
+            </button>
+            <UpdateButton />
+            <button
+              type="button"
+              onClick={() => setShowSettingsModal(true)}
+              className="btn btn-ghost btn-icon h-7 w-7"
+              title="Settings & CLI Paths"
+            >
+              <SettingsIcon size={13} />
+            </button>
+          </div>
+
+          <div className="my-auto h-4 w-px bg-white/[0.08]" />
+
+          <WindowControls />
         </div>
       </header>
 
       {/* Main Layout: Left Sidebar + Center Workspace */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Left Sidebar: Projects & Recent Threads */}
-        <aside className="glass-sidebar flex w-[248px] shrink-0 flex-col rounded-tr-xl border-t border-r">
+        <aside className="glass-sidebar flex w-[248px] shrink-0 flex-col border-r">
           {/* New Interactive Session Button */}
           <div className="p-3">
             <button
@@ -444,7 +456,7 @@ export default function App(): React.JSX.Element {
             <div className="flex-1 space-y-0.5 overflow-y-auto pr-0.5">
               {threads.length === 0 ? (
                 <p className="px-2 py-4 text-[12px] text-zinc-500">
-                  No sessions yet. Start one with the composer to stream live from Claude, Antigravity, or Gemini.
+                  No sessions yet. Start one with the composer to stream live from Claude, Antigravity, Codex, or Copilot.
                 </p>
               ) : (
                 threads.map((t) => {
@@ -525,7 +537,7 @@ export default function App(): React.JSX.Element {
                       </button>
                     )}
                     <GitControls project={currentProject} />
-                    <button type="button" className="btn h-7 px-2.5 text-[11.5px]" onClick={() => setShowRules(true)} title="One set of rules synced to CLAUDE.md, AGENTS.md, GEMINI.md and Copilot">
+                    <button type="button" className="btn h-7 px-2.5 text-[11.5px]" onClick={() => setShowRules(true)} title="One set of rules synced to CLAUDE.md, AGENTS.md and Copilot">
                       <ScrollText size={12} className="text-amber-300" /> Rules
                     </button>
                   </div>
@@ -919,10 +931,11 @@ function ActiveSessionStream({
   const [subTab, setSubTab] = useState<'stream' | 'changes'>('stream')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const { data: logs } = useData(() => api.projects.log(t.id), [t.id, t.run_state, t.tokens])
-  const { data: changes } = useData(() => api.projects.changes(t.id), [t.id, t.run_state])
+  const { data: changes } = useData(() => api.projects.changes(t.id), [t.id, t.run_state], { throttleMs: 2500 })
   const { data: fileDiff } = useData(
     () => (selectedFile ? api.projects.diff(t.id, selectedFile) : Promise.resolve('')),
-    [t.id, selectedFile]
+    [t.id, selectedFile],
+    { throttleMs: 2500 }
   )
   const bottomRef = useRef<HTMLDivElement>(null)
   const busy = t.run_state === 'running'
@@ -1706,15 +1719,6 @@ function SettingsModal({ settings, onClose }: { settings: Settings; onClose: () 
           />
         </Field>
 
-        <Field label="Gemini CLI Path (leave empty for auto-detection)">
-          <input
-            className="input font-mono text-[12px]"
-            value={s.geminiPath}
-            onChange={(e) => setS({ ...s, geminiPath: e.target.value })}
-            placeholder="Auto-detect gemini"
-          />
-        </Field>
-
         <Field label="GitHub Copilot CLI Path (leave empty for auto-detection)">
           <input
             className="input font-mono text-[12px]"
@@ -1734,7 +1738,6 @@ function SettingsModal({ settings, onClose }: { settings: Settings; onClose: () 
               <option value="claude">Claude Code</option>
               <option value="agy">Antigravity</option>
               <option value="codex">OpenAI Codex</option>
-              <option value="gemini">Gemini CLI</option>
               <option value="copilot">GitHub Copilot</option>
             </select>
           </Field>

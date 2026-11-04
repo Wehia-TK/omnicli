@@ -1,5 +1,6 @@
 import { execFile, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { CliId, CliLimitInfo, CliModel, CliSubscriptionStatus, EffortLevel, ModelLimitBucket } from '@shared/types'
@@ -171,26 +172,6 @@ const CATALOG_MODELS: Record<CliId, CliModel[]> = {
       defaultEffort: 'medium'
     }
   ],
-  gemini: [
-    {
-      id: 'gemini-4-argon',
-      name: 'Gemini 4 Argon',
-      tier: 'Flagship',
-      cli: 'gemini',
-      description: 'Flagship reasoning & coding via standalone Gemini CLI',
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'high'
-    },
-    {
-      id: 'gemini-3.8-flash',
-      name: 'Gemini 3.8 Flash',
-      tier: 'Fast',
-      cli: 'gemini',
-      description: 'High-speed coding and shell assistance',
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'medium'
-    }
-  ],
   copilot: [
     {
       id: 'claude-sonnet-5-5',
@@ -309,14 +290,6 @@ function locateCliExecutable(cli: CliId, s: ReturnType<typeof getSettings>): str
     const onPath = whereBin('codex')
     if (onPath) return onPath
     const npmCmd = join(appData, 'npm', 'codex.cmd')
-    return existsSync(npmCmd) ? npmCmd : ''
-  }
-
-  if (cli === 'gemini') {
-    if (s.geminiPath.trim() && existsSync(s.geminiPath.trim())) return s.geminiPath.trim()
-    const onPath = whereBin('gemini')
-    if (onPath) return onPath
-    const npmCmd = join(appData, 'npm', 'gemini.cmd')
     return existsSync(npmCmd) ? npmCmd : ''
   }
 
@@ -448,34 +421,6 @@ function detectAuth(cli: CliId, exePath: string): {
     }
   }
 
-  if (cli === 'gemini') {
-    const oauthPath = join(home, '.gemini', 'oauth_creds.json')
-    const accountsPath = join(home, '.gemini', 'google_accounts.json')
-    const hasStandaloneGeminiAuth = existsSync(oauthPath) || existsSync(accountsPath)
-    if (exePath && hasStandaloneGeminiAuth) {
-      return {
-        installed: true,
-        authenticated: true,
-        accountLabel: 'Google Account',
-        statusReason: 'Authenticated via Gemini CLI'
-      }
-    }
-    if (exePath && !hasStandaloneGeminiAuth) {
-      return {
-        installed: true,
-        authenticated: false,
-        accountLabel: 'Not signed in',
-        statusReason: 'Installed — run `gemini` to sign in with Google'
-      }
-    }
-    return {
-      installed: false,
-      authenticated: false,
-      accountLabel: 'Not installed',
-      statusReason: 'Standalone Gemini CLI not installed (use Antigravity or `npm i -g @google/gemini-cli`)'
-    }
-  }
-
   if (cli === 'codex') {
     const authJson = join(home, '.codex', 'auth.json')
     let hasValidToken = false
@@ -567,9 +512,6 @@ function windowBudgetFor(cli: CliId, detectedPlan?: string): { maxTokens: number
   if (cli === 'codex') {
     if (s.codexTier === 'pro') return { maxTokens: 2_500_000, maxRequests: 300, planLabel: 'ChatGPT Pro' }
     return { maxTokens: 500_000, maxRequests: 80, planLabel: 'ChatGPT Plus' }
-  }
-  if (cli === 'gemini') {
-    return { maxTokens: 1_500_000, maxRequests: 150, planLabel: s.geminiTier === 'advanced' ? 'Google AI Pro' : 'Gemini Free' }
   }
   return {
     maxTokens: 600_000,
@@ -740,94 +682,175 @@ function listRecentFiles(root: string, test: (name: string) => boolean, sinceMs:
 }
 
 let cachedClaudeTranscripts: TranscriptTotals | null = null
+let claudeScanInFlight: Promise<TranscriptTotals> | null = null
 
-/** Sum real token usage from Claude Code transcripts (~/.claude/projects/**.jsonl) — includes usage from Claude Desktop & terminal, not just AI Hub. */
-function scanClaudeTranscripts(starts: { window: number; today: number; week: number }): TranscriptTotals {
-  if (cachedClaudeTranscripts && Date.now() - cachedClaudeTranscripts.at < 30_000) return cachedClaudeTranscripts
-  const totals = emptyTotals()
-  const seen = new Set<string>()
-  for (const file of listRecentFiles(join(homedir(), '.claude', 'projects'), (n) => n.endsWith('.jsonl'), starts.week, 3)) {
-    let raw = ''
+interface ParsedTurn {
+  ts: number
+  tokens: number
+  model: string
+  /** de-dupe key (Claude repeats a message across resumed sessions) */
+  id?: string
+}
+
+/** Per-file parse cache: transcripts are append-only, so only the bytes added since the last scan are read. */
+const turnCache = new Map<string, { size: number; mtime: number; offset: number; turns: ParsedTurn[] }>()
+
+/** Yield to the event loop so IPC and window events keep flowing during a long scan. */
+const yieldLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
+
+/**
+ * Turns parsed from one JSONL transcript, reading only new complete lines (async, non-blocking).
+ * Re-reads from scratch when the file shrank (rotated/rewritten).
+ */
+async function readTurnsIncremental(file: string, parseLine: (line: string) => ParsedTurn | null): Promise<ParsedTurn[]> {
+  let st: Awaited<ReturnType<typeof stat>>
+  try {
+    st = await stat(file)
+  } catch {
+    turnCache.delete(file)
+    return []
+  }
+  let entry = turnCache.get(file)
+  if (entry && entry.size === st.size && entry.mtime === st.mtimeMs) return entry.turns
+  if (!entry || st.size < entry.offset) entry = { size: 0, mtime: 0, offset: 0, turns: [] }
+  const len = st.size - entry.offset
+  if (len > 0) {
+    let fh: Awaited<ReturnType<typeof open>> | null = null
     try {
-      raw = readFileSync(file, 'utf8')
-    } catch {
-      continue
-    }
-    for (const line of raw.split('\n')) {
-      if (!line.includes('"usage"') || !line.includes('"assistant"')) continue
-      try {
-        const o = JSON.parse(line) as {
-          type?: string
-          timestamp?: string
-          message?: { id?: string; model?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number } }
+      fh = await open(file, 'r')
+      const buf = Buffer.alloc(len)
+      const { bytesRead } = await fh.read(buf, 0, len, entry.offset)
+      // Only consume whole lines; a half-written last line is picked up next time
+      const lastNl = buf.subarray(0, bytesRead).lastIndexOf(0x0a)
+      if (lastNl >= 0) {
+        const lines = buf.subarray(0, lastNl).toString('utf8').split('\n')
+        for (let i = 0; i < lines.length; i++) {
+          const t = parseLine(lines[i])
+          if (t) entry.turns.push(t)
+          if (i % 2000 === 1999) await yieldLoop()
         }
-        const id = o.message?.id
-        if (o.type !== 'assistant' || !id || seen.has(id) || !o.message?.usage) continue
-        seen.add(id)
-        const u = o.message.usage
-        const tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
-        const ts = o.timestamp ? Date.parse(o.timestamp) : 0
-        if (ts) addTurn(totals, ts, tokens, (o.message.model ?? '').replace(/\[.*\]$/, ''), starts)
-      } catch {
-        // ignore partial lines
+        entry.offset += lastNl + 1
       }
+    } catch {
+      return entry.turns
+    } finally {
+      await fh?.close().catch(() => undefined)
     }
   }
-  return (cachedClaudeTranscripts = totals)
+  entry.size = st.size
+  entry.mtime = st.mtimeMs
+  turnCache.set(file, entry)
+  return entry.turns
+}
+
+function parseClaudeLine(line: string): ParsedTurn | null {
+  if (!line.includes('"usage"') || !line.includes('"assistant"')) return null
+  try {
+    const o = JSON.parse(line) as {
+      type?: string
+      timestamp?: string
+      message?: { id?: string; model?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number } }
+    }
+    const id = o.message?.id
+    if (o.type !== 'assistant' || !id || !o.message?.usage) return null
+    const u = o.message.usage
+    const ts = o.timestamp ? Date.parse(o.timestamp) : 0
+    if (!ts) return null
+    return {
+      id,
+      ts,
+      tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+      model: (o.message.model ?? '').replace(/\[.*\]$/, '')
+    }
+  } catch {
+    return null // partial line
+  }
+}
+
+/** Sum real token usage from Claude Code transcripts (~/.claude/projects/**.jsonl) — includes usage from Claude Desktop & terminal, not just AI Hub. */
+async function scanClaudeTranscripts(starts: { window: number; today: number; week: number }): Promise<TranscriptTotals> {
+  if (cachedClaudeTranscripts && Date.now() - cachedClaudeTranscripts.at < 30_000) return cachedClaudeTranscripts
+  if (claudeScanInFlight) return claudeScanInFlight
+  claudeScanInFlight = (async () => {
+    const totals = emptyTotals()
+    const seen = new Set<string>()
+    for (const file of listRecentFiles(join(homedir(), '.claude', 'projects'), (n) => n.endsWith('.jsonl'), starts.week, 3)) {
+      for (const t of await readTurnsIncremental(file, parseClaudeLine)) {
+        if (t.id) {
+          if (seen.has(t.id)) continue
+          seen.add(t.id)
+        }
+        addTurn(totals, t.ts, t.tokens, t.model, starts)
+      }
+      await yieldLoop()
+    }
+    return (cachedClaudeTranscripts = totals)
+  })().finally(() => {
+    claudeScanInFlight = null
+  })
+  return claudeScanInFlight
 }
 
 let cachedAgyTranscripts: TranscriptTotals | null = null
+let agyScanInFlight: Promise<TranscriptTotals> | null = null
 
-/** Real Antigravity token usage from ~/.gemini/antigravity*\/brain/*\/transcript.jsonl (input+output tokens per model turn). */
-function scanAgyTranscripts(starts: { window: number; today: number; week: number }): TranscriptTotals {
-  if (cachedAgyTranscripts && Date.now() - cachedAgyTranscripts.at < 20_000) return cachedAgyTranscripts
-  const totals = emptyTotals()
-  // Conversations started from AI Hub know their model; others are attributed to "unknown"
-  const convModel = new Map<string, string>()
+function parseAgyLine(line: string): ParsedTurn | null {
+  if (!line.includes('PLANNER_RESPONSE')) return null
   try {
-    for (const r of all<{ agy_conversation: string; model: string }>(
-      "SELECT agy_conversation, model FROM project_tasks WHERE agy_conversation IS NOT NULL AND agy_conversation != ''"
-    )) {
-      convModel.set(r.agy_conversation, r.model)
-    }
+    const o = JSON.parse(line) as { type?: string; created_at?: string; input_tokens?: number; output_tokens?: number }
+    if (o.type !== 'PLANNER_RESPONSE') return null
+    const ts = o.created_at ? Date.parse(o.created_at) : 0
+    if (!ts) return null
+    return { ts, tokens: (o.input_tokens ?? 0) + (o.output_tokens ?? 0) || Math.round(line.length / 3.5), model: '' }
   } catch {
-    // ignore
+    return null
   }
-  const home = homedir()
-  for (const root of [join(home, '.gemini', 'antigravity', 'brain'), join(home, '.gemini', 'antigravity-cli', 'brain')]) {
-    let convos: string[] = []
-    try {
-      convos = readdirSync(root, { withFileTypes: true })
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name)
-    } catch {
-      continue
-    }
-    for (const c of convos) {
-      const transcript = join(root, c, '.system_generated', 'logs', 'transcript.jsonl')
-      try {
-        if (!existsSync(transcript) || statSync(transcript).mtimeMs < starts.week) continue
-        const model = (convModel.get(c) ?? '').replace(/-(low|medium|high)$/i, '')
-        for (const line of readFileSync(transcript, 'utf8').split('\n')) {
-          if (!line.includes('PLANNER_RESPONSE')) continue
-          try {
-            const o = JSON.parse(line) as { type?: string; created_at?: string; input_tokens?: number; output_tokens?: number }
-            if (o.type !== 'PLANNER_RESPONSE') continue
-            const tokens = (o.input_tokens ?? 0) + (o.output_tokens ?? 0) || Math.round(line.length / 3.5)
-            const ts = o.created_at ? Date.parse(o.created_at) : 0
-            if (ts) addTurn(totals, ts, tokens, model, starts)
-          } catch {
-            // ignore
-          }
-        }
-      } catch {
-        // ignore unreadable conversation
-      }
-    }
-  }
-  return (cachedAgyTranscripts = totals)
 }
 
+/** Real Antigravity token usage from ~/.gemini/antigravity*\/brain/*\/transcript.jsonl (input+output tokens per model turn). */
+async function scanAgyTranscripts(starts: { window: number; today: number; week: number }): Promise<TranscriptTotals> {
+  if (cachedAgyTranscripts && Date.now() - cachedAgyTranscripts.at < 20_000) return cachedAgyTranscripts
+  if (agyScanInFlight) return agyScanInFlight
+  agyScanInFlight = (async () => {
+    const totals = emptyTotals()
+    // Conversations started from AI Hub know their model; others are attributed to "unknown"
+    const convModel = new Map<string, string>()
+    try {
+      for (const r of all<{ agy_conversation: string; model: string }>(
+        "SELECT agy_conversation, model FROM project_tasks WHERE agy_conversation IS NOT NULL AND agy_conversation != ''"
+      )) {
+        convModel.set(r.agy_conversation, r.model)
+      }
+    } catch {
+      // ignore
+    }
+    const home = homedir()
+    for (const root of [join(home, '.gemini', 'antigravity', 'brain'), join(home, '.gemini', 'antigravity-cli', 'brain')]) {
+      let convos: string[] = []
+      try {
+        convos = (await readdir(root, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name)
+      } catch {
+        continue
+      }
+      for (const c of convos) {
+        const transcript = join(root, c, '.system_generated', 'logs', 'transcript.jsonl')
+        try {
+          const st = await stat(transcript)
+          if (st.mtimeMs < starts.week) continue
+        } catch {
+          continue
+        }
+        const model = (convModel.get(c) ?? '').replace(/-(low|medium|high)$/i, '')
+        for (const t of await readTurnsIncremental(transcript, parseAgyLine)) addTurn(totals, t.ts, t.tokens, model, starts)
+        await yieldLoop()
+      }
+    }
+    return (cachedAgyTranscripts = totals)
+  })().finally(() => {
+    agyScanInFlight = null
+  })
+  return agyScanInFlight
+}
 /** Exact token usage for one Antigravity conversation since a given time (used to bill a run accurately). */
 export function agyConversationTokens(conversationId: string, sinceMs: number): number {
   const home = homedir()
@@ -895,8 +918,22 @@ interface CodexLive {
 }
 let cachedCodexLive: { at: number; value: CodexLive | null } | null = null
 
+/** Last maxBytes of a file (async) — enough to find the newest rate-limit line without reading huge rollouts. */
+async function readTail(file: string, maxBytes: number): Promise<string> {
+  const fh = await open(file, 'r')
+  try {
+    const { size } = await fh.stat()
+    const len = Math.min(size, maxBytes)
+    const buf = Buffer.alloc(len)
+    const { bytesRead } = await fh.read(buf, 0, len, size - len)
+    return buf.subarray(0, bytesRead).toString('utf8')
+  } finally {
+    await fh.close().catch(() => undefined)
+  }
+}
+
 /** Codex writes the server's rate-limit snapshot into ~/.codex/sessions/**\/rollout-*.jsonl on every turn. */
-function readCodexLiveLimits(nowMs: number): CodexLive | null {
+async function readCodexLiveLimits(nowMs: number): Promise<CodexLive | null> {
   if (cachedCodexLive && nowMs - cachedCodexLive.at < 20_000) return cachedCodexLive.value
   let value: CodexLive | null = null
   const files = listRecentFiles(join(homedir(), '.codex', 'sessions'), (n) => n.startsWith('rollout-') && n.endsWith('.jsonl'), nowMs - 7 * 86_400_000, 4)
@@ -918,7 +955,7 @@ function readCodexLiveLimits(nowMs: number): CodexLive | null {
   }
   for (const { f, m } of files.slice(0, 6)) {
     try {
-      const lines = readFileSync(f, 'utf8').split('\n')
+      const lines = (await readTail(f, 512 * 1024)).split('\n')
       for (let i = lines.length - 1; i >= 0; i--) {
         if (!lines[i].includes('rate_limits')) continue
         const o = JSON.parse(lines[i]) as { payload?: { rate_limits?: { primary?: Win; secondary?: Win } }; rate_limits?: { primary?: Win; secondary?: Win } }
@@ -1114,7 +1151,7 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
   const rateEv = activeRateEvent(cli, nowMs)
 
   if (cli === 'claude') {
-    const tx = scanClaudeTranscripts(starts)
+    const tx = await scanClaudeTranscripts(starts)
     out.usedTokens = Math.max(win.tokens, tx.window.tokens)
     out.usedRequests = Math.max(win.reqs, tx.window.turns)
     out.todayTokens = Math.max(today.tokens, tx.today.tokens)
@@ -1158,7 +1195,7 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
   }
 
   if (cli === 'codex') {
-    const live = readCodexLiveLimits(nowMs)
+    const live = await readCodexLiveLimits(nowMs)
     if (live) {
       out.source = 'live'
       out.utilizationPct = rateEv?.status === 'rejected' ? 100 : live.primary.pct
@@ -1175,7 +1212,7 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
   }
 
   if (cli === 'agy') {
-    const tx = scanAgyTranscripts(starts)
+    const tx = await scanAgyTranscripts(starts)
     out.usedTokens = Math.max(win.tokens, tx.window.tokens)
     out.usedRequests = Math.max(win.reqs, tx.window.turns)
     out.todayTokens = Math.max(today.tokens, tx.today.tokens)
@@ -1518,7 +1555,7 @@ let statusCache: { at: number; value: CliSubscriptionStatus[] } | null = null
 let statusInFlight: Promise<CliSubscriptionStatus[]> | null = null
 
 export const clis = {
-  /** All 5 AI subscriptions with live authentication state, up-to-date models, and live 5-hour/7-day usage limits. */
+  /** All 4 AI subscriptions with live authentication state, up-to-date models, and live 5-hour/7-day usage limits. */
   /** Cached for a few seconds: the renderer re-requests this on every DB change while a run streams. */
   statusAll: async (forceRefresh = false): Promise<CliSubscriptionStatus[]> => {
     if (!forceRefresh && statusCache && Date.now() - statusCache.at < 8000) return statusCache.value
@@ -1574,15 +1611,6 @@ export const clis = {
         accentColor: '#10b981',
         loginCommand: 'codex login',
         installCommand: 'npm install -g @openai/codex'
-      },
-      {
-        id: 'gemini',
-        name: 'Gemini CLI',
-        shortName: 'Gemini',
-        provider: 'Google',
-        accentColor: '#8b5cf6',
-        loginCommand: 'gemini',
-        installCommand: 'npm install -g @google/gemini-cli'
       },
       {
         id: 'copilot',
