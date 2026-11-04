@@ -19,6 +19,13 @@ const APP_NAME = 'Omni CLI'
 app.setName(APP_NAME)
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_ID)
+} else if (process.platform === 'darwin') {
+  const macPaths = ['/opt/homebrew/bin', '/usr/local/bin', join(app.getPath('home'), '.local', 'bin')]
+  const existing = (process.env.PATH || '').split(':')
+  const toAdd = macPaths.filter((p) => existsSync(p) && !existing.includes(p))
+  if (toAdd.length > 0) {
+    process.env.PATH = `${toAdd.join(':')}:${process.env.PATH || ''}`
+  }
 }
 
 /** Ensure Windows taskbar jump-list, Start Menu & folder shortcuts launch Electron directly (no cmd.exe). */
@@ -82,6 +89,7 @@ function broadcastChanged(): void {
 }
 
 function createWindow(): void {
+  const isDarwin = process.platform === 'darwin'
   const winIcon = nativeImage.createFromPath(process.platform === 'win32' ? appIconIco : appIconPng)
   mainWindow = new BrowserWindow({
     title: APP_NAME,
@@ -93,6 +101,8 @@ function createWindow(): void {
     backgroundColor: '#08090f',
     icon: winIcon,
     frame: false,
+    titleBarStyle: isDarwin ? 'hiddenInset' : undefined,
+    trafficLightPosition: isDarwin ? { x: 12, y: 12 } : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

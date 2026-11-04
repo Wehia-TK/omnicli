@@ -36,8 +36,25 @@ export function initTerminal(onOutput: TerminalListener): void {
   emitter = onOutput
 }
 
+const isWin = process.platform === 'win32'
+const defaultShell = isWin ? 'powershell.exe' : (process.env.SHELL || '/bin/zsh')
+const shellArgs = isWin ? ['-NoLogo'] : ['-l']
+
 const killTree = (pid?: number): void => {
-  if (pid) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
+  if (!pid) return
+  if (isWin) {
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
+  } else {
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // ignore
+      }
+    }
+  }
 }
 
 function close(sessionId: string): void {
@@ -60,23 +77,23 @@ export function stopAllTerminals(): void {
 const psq = (s: string): string => `'${s.replace(/'/g, "''")}'`
 
 export const terminal = {
-  /** True when a real pseudo-terminal (ConPTY) is available — interactive TUIs and logins render correctly. */
+  /** True when a real pseudo-terminal is available — interactive TUIs and logins render correctly. */
   isPty: (): boolean => Boolean(loadPty()),
 
-  /** Start or restart a PowerShell session in `cwd`. */
+  /** Start or restart an interactive shell session in `cwd`. */
   start: (sessionId: string, cwd: string, initialCommand?: string, cols = 120, rows = 30): { sessionId: string; cwd: string; pty: boolean } => {
     close(sessionId)
     const workDir = cwd && existsSync(cwd) ? cwd : process.cwd()
     const pty = loadPty()
 
     if (pty) {
-      const term = pty.spawn('powershell.exe', ['-NoLogo'], {
+      const term = pty.spawn(defaultShell, shellArgs, {
         name: 'xterm-256color',
         cols: Math.max(20, cols),
         rows: Math.max(5, rows),
         cwd: workDir,
         env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
-        useConpty: true
+        ...(isWin ? { useConpty: true } : {})
       })
       sessions.set(sessionId, { cwd: workDir, pty: term })
       term.onData((data) => emitter({ sessionId, stream: 'stdout', data }))
@@ -89,9 +106,11 @@ export const terminal = {
     }
 
     // Fallback: plain pipes (no TUI support)
-    const proc = spawn('powershell.exe', ['-NoLogo', '-NoExit', '-Command', '-'], { cwd: workDir, windowsHide: true, env: { ...process.env, TERM: 'xterm-256color' } })
+    const proc = isWin
+      ? spawn('powershell.exe', ['-NoLogo', '-NoExit', '-Command', '-'], { cwd: workDir, windowsHide: true, env: { ...process.env, TERM: 'xterm-256color' } })
+      : spawn(defaultShell, ['-i'], { cwd: workDir, env: { ...process.env, TERM: 'xterm-256color' } })
     sessions.set(sessionId, { cwd: workDir, proc })
-    emitter({ sessionId, stream: 'system', data: `Connected to PowerShell in ${workDir} (basic mode)\r\n` })
+    emitter({ sessionId, stream: 'system', data: `Connected to ${isWin ? 'PowerShell' : defaultShell} in ${workDir} (basic mode)\r\n` })
     proc.stdout?.setEncoding('utf8')
     proc.stdout?.on('data', (data: string) => emitter({ sessionId, stream: 'stdout', data: data.replace(/\r?\n/g, '\r\n') }))
     proc.stderr?.setEncoding('utf8')
@@ -100,7 +119,7 @@ export const terminal = {
       if (sessions.get(sessionId)?.proc === proc) sessions.delete(sessionId)
       emitter({ sessionId, stream: 'system', data: `\r\n[Process exited with code ${code ?? 0}]\r\n`, exitCode: code })
     })
-    proc.stdin?.write(`${initialCommand?.trim() || 'Write-Output "Ready ($(Get-Location))"'}\r\n`)
+    proc.stdin?.write(`${initialCommand?.trim() || (isWin ? 'Write-Output "Ready ($(Get-Location))"' : 'echo "Ready ($(pwd))"')}\r\n`)
     return { sessionId, cwd: workDir, pty: false }
   },
 
@@ -153,6 +172,18 @@ export const terminal = {
   openExternalCli: (cli: CliId, cwd: string, extraArgs = ''): true => {
     const exe = findCliExecutable(cli) || cli
     const folder = cwd && existsSync(cwd) ? cwd : process.cwd()
+
+    if (process.platform === 'darwin') {
+      const fullCmd = `${exe} ${extraArgs}`.trim()
+      const script = `tell application "Terminal"
+        activate
+        do script "cd " & quoted form of "${folder.replace(/"/g, '\\"')}" & " && " & quoted form of "${fullCmd.replace(/"/g, '\\"')}"
+      end tell`
+      const child = spawn('osascript', ['-e', script], { stdio: 'ignore' })
+      child.unref()
+      return true
+    }
+
     const cmdLine = `& ${psq(exe)} ${extraArgs}`.trim()
     const script = [`Set-Location -LiteralPath ${psq(folder)}`, `$host.UI.RawUI.WindowTitle = ${psq(`Omni CLI — ${cli.toUpperCase()} (${folder})`)}`, cmdLine].join('; ')
     const encoded = Buffer.from(script, 'utf16le').toString('base64')

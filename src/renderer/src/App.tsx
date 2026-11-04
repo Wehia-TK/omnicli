@@ -292,7 +292,10 @@ export default function App(): React.JSX.Element {
     <div className="dark flex h-screen w-screen flex-col overflow-hidden text-zinc-100">
       {/* Custom Top Title Bar */}
       <header
-        className="glass-bar flex h-10 shrink-0 items-center justify-between border-b pl-3.5 select-none"
+        className={cx(
+          "glass-bar flex h-10 shrink-0 items-center justify-between border-b select-none",
+          window.aihub?.platform === 'darwin' ? 'pl-20' : 'pl-3.5'
+        )}
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         onDoubleClick={(e) => {
           if ((e.target as HTMLElement).closest('button, input, a, [data-no-drag]')) return
@@ -1692,21 +1695,21 @@ function SettingsModal({ settings, onClose }: { settings: Settings; onClose: () 
       }
     >
       <div className="space-y-3">
-        <Field label="Antigravity CLI Path (leave empty for auto-detection)" hint="Finds `agy` on PATH or `%LOCALAPPDATA%\agy\bin\agy.exe`">
+        <Field label="Antigravity CLI Path (leave empty for auto-detection)" hint="Finds `agy` on PATH, Homebrew, or standard install location">
           <input
             className="input font-mono text-[12px]"
             value={s.agyPath}
             onChange={(e) => setS({ ...s, agyPath: e.target.value })}
-            placeholder="Auto-detect agy.exe"
+            placeholder="Auto-detect agy"
           />
         </Field>
 
-        <Field label="Claude Code CLI Path (leave empty for auto-detection)" hint="Finds `claude` on PATH or Claude Desktop bundled binary">
+        <Field label="Claude Code CLI Path (leave empty for auto-detection)" hint="Finds `claude` on PATH, Homebrew, or Claude Desktop bundled binary">
           <input
             className="input font-mono text-[12px]"
             value={s.claudePath}
             onChange={(e) => setS({ ...s, claudePath: e.target.value })}
-            placeholder="Auto-detect claude.exe"
+            placeholder="Auto-detect claude"
           />
         </Field>
 

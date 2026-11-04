@@ -1,5 +1,5 @@
 import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type { CheckoutMode, CliId, EffortLevel, LogLine, MentionItem, PermissionMode, Project, ProjectTask, ProjectTaskStatus, TaskChanges } from '@shared/types'
 import {
@@ -47,7 +47,20 @@ export function stopAllRuns(): void {
 }
 
 function killProcess(child: ChildProcess): void {
-  if (child.pid) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+  if (!child.pid) return
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+  } else {
+    try {
+      process.kill(-child.pid, 'SIGKILL')
+    } catch {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        // ignore
+      }
+    }
+  }
 }
 
 export const getProject = (id: number): Project => {
@@ -183,9 +196,13 @@ function removeWorktree(t: ProjectTask, p: Project): void {
   if (t.checkout_mode === 'local' || !t.worktree || t.worktree === p.folder) return
   const link = join(t.worktree, 'node_modules')
   try {
-    rmdirSync(link)
+    if (existsSync(link)) {
+      const st = lstatSync(link)
+      if (st.isSymbolicLink()) unlinkSync(link)
+      else rmdirSync(link)
+    }
   } catch {
-    // not a link
+    // not a link or already gone
   }
   try {
     git(p.folder, ['worktree', 'remove', '--force', t.worktree])

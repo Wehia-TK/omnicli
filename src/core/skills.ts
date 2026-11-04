@@ -203,7 +203,12 @@ async function installSkills(rawUrl: string, targets: CliId[]): Promise<{ instal
       const zip = join(tmp, 'skill.zip')
       writeFileSync(zip, Buffer.from(await res.arrayBuffer()))
       const out = join(tmp, 'unzipped')
-      await run('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zip.replace(/'/g, "''")}' -DestinationPath '${out.replace(/'/g, "''")}' -Force`])
+      if (process.platform === 'win32') {
+        await run('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zip.replace(/'/g, "''")}' -DestinationPath '${out.replace(/'/g, "''")}' -Force`])
+      } else {
+        mkdirSync(out, { recursive: true })
+        await run('unzip', ['-q', '-o', zip, '-d', out])
+      }
       sources = findSkillDirs(out)
     } else {
       const res = await fetch(url, { signal: AbortSignal.timeout(30_000) })

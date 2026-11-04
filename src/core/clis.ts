@@ -204,22 +204,46 @@ const CATALOG_MODELS: Record<CliId, CliModel[]> = {
 }
 
 function whereBin(name: string): string {
-  try {
-    const r = spawnSync('where.exe', [name], { windowsHide: true, timeout: 4000, encoding: 'utf8' })
-    if (r.status !== 0 || !r.stdout) return ''
-    const hits = r.stdout
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean)
-    return hits.find((h) => /\.exe$/i.test(h)) ?? hits.find((h) => /\.(cmd|bat)$/i.test(h)) ?? hits[0] ?? ''
-  } catch {
-    return ''
+  if (process.platform === 'win32') {
+    try {
+      const r = spawnSync('where.exe', [name], { windowsHide: true, timeout: 4000, encoding: 'utf8' })
+      if (r.status !== 0 || !r.stdout) return ''
+      const hits = r.stdout
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+      return hits.find((h) => /\.exe$/i.test(h)) ?? hits.find((h) => /\.(cmd|bat)$/i.test(h)) ?? hits[0] ?? ''
+    } catch {
+      return ''
+    }
   }
+
+  // macOS / Linux resolution
+  try {
+    const r = spawnSync('which', [name], { timeout: 4000, encoding: 'utf8' })
+    if (r.status === 0 && r.stdout) {
+      const hit = r.stdout.split('\n')[0].trim()
+      if (hit && existsSync(hit)) return hit
+    }
+  } catch {
+    // fallback to common paths
+  }
+
+  const commonMacPaths = [
+    join('/opt', 'homebrew', 'bin', name),
+    join('/usr', 'local', 'bin', name),
+    join(homedir(), '.local', 'bin', name)
+  ]
+  return commonMacPaths.find((p) => existsSync(p)) ?? ''
 }
 
 function bundledClaudeCli(): string {
-  const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
-  const root = join(localAppData, 'Claude-Data')
+  const home = homedir()
+  const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local')
+  const searchRoots = [
+    join(localAppData, 'Claude-Data'),
+    join(home, 'Library', 'Application Support', 'Claude', 'Claude-Data')
+  ]
   const hits: { path: string; at: number }[] = []
   const dirs = (d: string): string[] => {
     try {
@@ -230,11 +254,17 @@ function bundledClaudeCli(): string {
       return []
     }
   }
-  for (const install of dirs(root)) {
-    for (const version of dirs(join(install, 'claude-code'))) {
-      for (const build of dirs(version)) {
-        const exe = join(build, 'claude.exe')
-        if (existsSync(exe)) hits.push({ path: exe, at: statSync(exe).mtimeMs })
+  for (const root of searchRoots) {
+    if (!existsSync(root)) continue
+    for (const install of dirs(root)) {
+      for (const version of dirs(join(install, 'claude-code'))) {
+        for (const build of dirs(version)) {
+          const binNames = process.platform === 'win32' ? ['claude.exe', 'claude.cmd'] : ['claude']
+          for (const bn of binNames) {
+            const exe = join(build, bn)
+            if (existsSync(exe)) hits.push({ path: exe, at: statSync(exe).mtimeMs })
+          }
+        }
       }
     }
   }
@@ -243,7 +273,7 @@ function bundledClaudeCli(): string {
 
 const exeCache = new Map<string, { path: string; at: number }>()
 
-/** Cached for 60s — `where.exe` is a blocking spawn and this is called from hot paths. */
+/** Cached for 60s — `where.exe` / `which` is a blocking spawn and this is called from hot paths. */
 export function findCliExecutable(cli: CliId): string {
   const s = getSettings()
   const key = `${cli}|${s[`${cli}Path` as 'claudePath'] ?? ''}`
@@ -266,9 +296,16 @@ function locateCliExecutable(cli: CliId, s: ReturnType<typeof getSettings>): str
     const bundled = bundledClaudeCli()
     if (bundled) return bundled
     const candidates = [
+      // Windows
       join(appData, 'npm', 'claude.cmd'),
       join(home, '.local', 'bin', 'claude.exe'),
-      join(home, '.claude', 'local', 'claude.exe')
+      join(home, '.claude', 'local', 'claude.exe'),
+      // macOS / Linux
+      '/opt/homebrew/bin/claude',
+      '/usr/local/bin/claude',
+      join(home, '.local', 'bin', 'claude'),
+      join(home, '.npm-global', 'bin', 'claude'),
+      join(home, '.claude', 'local', 'claude')
     ]
     return candidates.find((c) => existsSync(c)) ?? ''
   }
@@ -278,9 +315,16 @@ function locateCliExecutable(cli: CliId, s: ReturnType<typeof getSettings>): str
     const onPath = whereBin('agy')
     if (onPath) return onPath
     const candidates = [
+      // Windows
       join(localAppData, 'agy', 'bin', 'agy.exe'),
       join(localAppData, 'Programs', 'Antigravity', 'bin', 'agy.exe'),
-      join(localAppData, 'Programs', 'Antigravity', 'bin', 'antigravity.cmd')
+      join(localAppData, 'Programs', 'Antigravity', 'bin', 'antigravity.cmd'),
+      // macOS / Linux
+      '/opt/homebrew/bin/agy',
+      '/usr/local/bin/agy',
+      join(home, '.local', 'bin', 'agy'),
+      join(home, '.gemini', 'antigravity-cli', 'bin', 'agy'),
+      join(home, '.gemini', 'antigravity', 'bin', 'agy')
     ]
     return candidates.find((c) => existsSync(c)) ?? ''
   }
@@ -289,16 +333,28 @@ function locateCliExecutable(cli: CliId, s: ReturnType<typeof getSettings>): str
     if (s.codexPath.trim() && existsSync(s.codexPath.trim())) return s.codexPath.trim()
     const onPath = whereBin('codex')
     if (onPath) return onPath
-    const npmCmd = join(appData, 'npm', 'codex.cmd')
-    return existsSync(npmCmd) ? npmCmd : ''
+    const candidates = [
+      join(appData, 'npm', 'codex.cmd'),
+      '/opt/homebrew/bin/codex',
+      '/usr/local/bin/codex',
+      join(home, '.local', 'bin', 'codex'),
+      join(home, '.npm-global', 'bin', 'codex')
+    ]
+    return candidates.find((c) => existsSync(c)) ?? ''
   }
 
   if (cli === 'copilot') {
     if (s.copilotPath.trim() && existsSync(s.copilotPath.trim())) return s.copilotPath.trim()
     const onPath = whereBin('copilot')
     if (onPath) return onPath
-    const shim = join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'copilot-shim', 'copilot.exe')
-    return existsSync(shim) ? shim : ''
+    const candidates = [
+      join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'copilot-shim', 'copilot.exe'),
+      '/opt/homebrew/bin/copilot',
+      '/usr/local/bin/copilot',
+      join(home, '.local', 'bin', 'copilot'),
+      '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
+    ]
+    return candidates.find((c) => existsSync(c)) ?? ''
   }
 
   return ''
@@ -459,9 +515,11 @@ function detectAuth(cli: CliId, exePath: string): {
   if (cli === 'copilot') {
     const hosts1 = join(localAppData, 'github-copilot', 'hosts.json')
     const hosts2 = join(home, '.config', 'github-copilot', 'hosts.json')
+    const hosts3 = join(home, 'Library', 'Application Support', 'github-copilot', 'hosts.json')
     const apps1 = join(localAppData, 'github-copilot', 'apps.json')
     const apps2 = join(home, '.config', 'github-copilot', 'apps.json')
-    const hasToken = [hosts1, hosts2, apps1, apps2].some((p) => {
+    const apps3 = join(home, 'Library', 'Application Support', 'github-copilot', 'apps.json')
+    const hasToken = [hosts1, hosts2, hosts3, apps1, apps2, apps3].some((p) => {
       if (!existsSync(p)) return false
       try {
         return readFileSync(p, 'utf8').includes('oauth_token')
