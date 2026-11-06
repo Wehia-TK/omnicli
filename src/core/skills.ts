@@ -178,7 +178,7 @@ const safeName = (s: string): string =>
  */
 async function installSkills(rawUrl: string, targets: CliId[]): Promise<{ installed: string[]; into: CliId[] }> {
   const url = rawUrl.trim()
-  if (!/^https?:\/\//i.test(url)) throw new Error('Paste a full link starting with https://')
+  if (!/^https:\/\//i.test(url)) throw new Error('Paste a full link starting with https://')
   const dirs = INSTALL_DIRS().filter((d) => targets.includes(d.cli))
   if (!dirs.length) throw new Error('Choose at least one AI to install the skill for')
   const tmp = mkdtempSync(join(tmpdir(), 'aihub-skill-'))
@@ -187,7 +187,8 @@ async function installSkills(rawUrl: string, targets: CliId[]): Promise<{ instal
     const gh = url.match(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/#?]+?)(?:\.git)?(?:\/(tree|blob)\/([^/]+)\/?([^#?]*))?\/?(?:[#?].*)?$/i)
     if (gh) {
       const [, owner, repo, kind, branch, subPath] = gh
-      const path = kind === 'blob' ? dirname(subPath).replace(/^\.$/, '') : subPath ?? ''
+      const path = (kind === 'blob' ? dirname(subPath).replace(/^\.$/, '') : subPath ?? '').replace(/\/+$/, '')
+      if (path.split('/').some((seg) => seg === '..') || (branch && branch.startsWith('-'))) throw new Error('That GitHub link is not valid')
       const repoDir = join(tmp, 'repo')
       const cloneArgs = ['clone', '--depth', '1', '--filter=blob:none', '--sparse', ...(branch ? ['-b', branch] : []), `https://github.com/${owner}/${repo}.git`, repoDir]
       try {

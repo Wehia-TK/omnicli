@@ -21,6 +21,7 @@ import { MULTI_ACCOUNT_CLIS, accountEnv, accountLabel, hasExtraAccounts, isAccou
 import { skills } from './skills'
 import { approvalMcpConfig, cancelApprovals } from './approvals'
 import { updateGraphNow } from './graphwatch'
+import { spawnCli } from './proc'
 import { phoneNotify } from './scheduler'
 import { all, get, notifyChanged, nowLocal, run, transaction } from './db'
 import { buildKnowledgePrompt, recordAiHandoff, syncKnowledgeToDir, withoutKbSync } from './knowledge'
@@ -612,10 +613,7 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
   const env = { ...process.env, ...accountEnv('claude', acct) }
   delete env.CLAUDECODE
 
-  const isCmd = /\.(cmd|bat)$/i.test(exe)
-  const child = isCmd
-    ? spawn(`"${exe}" ${args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`, { shell: true, cwd, env, windowsHide: true })
-    : spawn(exe, args, { cwd, env, windowsHide: true })
+  const child = spawnCli(exe, args, { cwd, env, windowsHide: true })
 
   running.set(t.id, child)
   run(
@@ -886,11 +884,8 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   }
 
   const childEnv = { ...process.env, ...accountEnv(cli, acct) }
-  const isCmd = /\.(cmd|bat)$/i.test(exe)
   const stdio: ['pipe' | 'ignore', 'pipe', 'pipe'] = [stdinPrompt !== null ? 'pipe' : 'ignore', 'pipe', 'pipe']
-  const child = isCmd
-    ? spawn(`"${exe}" ${args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`, { shell: true, cwd, env: childEnv, windowsHide: true, stdio })
-    : spawn(exe, args, { cwd, env: childEnv, windowsHide: true, stdio })
+  const child = spawnCli(exe, args, { cwd, env: childEnv, windowsHide: true, stdio })
   if (stdinPrompt !== null) {
     child.stdin?.on('error', () => undefined)
     child.stdin?.end(stdinPrompt)
@@ -1789,7 +1784,8 @@ export const projects = {
     const p = getProject(t.project_id)
     const cli = resolveCliFor(t, p)
     const cwd = t.worktree && existsSync(t.worktree) ? t.worktree : p.folder
-    const resumeArg = cli === 'claude' && t.session_id ? `--resume "${t.session_id}"` : ''
+    // The id is spliced into a PowerShell / zsh command line, so accept only plain session ids
+    const resumeArg = cli === 'claude' && t.session_id && /^[\w-]{1,128}$/.test(t.session_id) ? `--resume ${t.session_id}` : ''
     terminal.openExternalCli(cli, cwd, resumeArg)
     return true
   },

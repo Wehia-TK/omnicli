@@ -1,10 +1,11 @@
-import { execFile, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { CliId, CliLimitInfo, CliModel, CliSubscriptionStatus, EffortLevel, ModelLimitBucket } from '@shared/types'
 import { all, get, nowLocal, run, runSilent } from './db'
+import { execCli } from './proc'
 import { getSettings } from './settings'
 
 const CATALOG_MODELS: Record<CliId, CliModel[]> = {
@@ -1082,9 +1083,9 @@ async function fetchAgyLiveQuota(force = false): Promise<AgyQuotaGroup[] | null>
   if (!force && cachedAgyQuota && now - cachedAgyQuota.at < 60_000) return cachedAgyQuota.groups
   if (agyQuotaInFlight) return agyQuotaInFlight
   const exe = findCliExecutable('agy')
-  if (!exe || /\.(cmd|bat)$/i.test(exe)) return null
+  if (!exe) return null
   agyQuotaInFlight = new Promise<AgyQuotaGroup[] | null>((resolve) => {
-    execFile(exe, ['-p', '/usage', '--output-format', 'json'], { windowsHide: true, timeout: 25_000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
+    execCli(exe, ['-p', '/usage', '--output-format', 'json'], { windowsHide: true, timeout: 25_000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
       let groups: AgyQuotaGroup[] | null = null
       if (!err && out) {
         try {
@@ -1471,7 +1472,7 @@ async function loadDynamicAgyModels(exePath: string): Promise<CliModel[]> {
   if (dynamicAgyModels !== null) return dynamicAgyModels
   if (!exePath) return []
   return new Promise((resolve) => {
-    execFile(exePath, ['models'], { windowsHide: true, timeout: 6000 }, (err, out) => {
+    execCli(exePath, ['models'], { windowsHide: true, timeout: 6000 }, (err, out) => {
       if (err || !out) {
         dynamicAgyModels = []
         return resolve([])

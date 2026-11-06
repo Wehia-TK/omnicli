@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, mkdirSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 let db: DatabaseSync
@@ -195,104 +195,7 @@ export function openDatabase(dataDir: string): string {
     }
   }
 
-  seedInitialProjects()
   return dbPath
-}
-
-function seedInitialProjects(): void {
-  const count = (db.prepare('SELECT COUNT(*) AS c FROM projects').get() as { c: number }).c
-  if (count > 0) return
-
-  const now = nowLocal()
-  const aiWrapperFolder = existsSync('D:\\AI Wrapper') ? 'D:\\AI Wrapper' : process.cwd()
-  const personalAppFolder = existsSync('D:\\Personal App') ? 'D:\\Personal App' : ''
-
-  const p1 = Number(
-    db
-      .prepare(
-        `INSERT INTO projects (name, folder, notes, check_cmd, default_cli, default_model, default_mode, default_checkout, sort, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        'Omni CLI',
-        aiWrapperFolder,
-        'Centralized desktop app for AI CLI subscriptions (Claude Code, Antigravity, Codex, Copilot) with live usage limits and shared Project Knowledge Base.',
-        'npm run typecheck && npm run build',
-        'claude',
-        'claude-opus-5-5',
-        'default',
-        'local',
-        1,
-        now
-      ).lastInsertRowid
-  )
-
-  db.prepare(
-    `INSERT INTO knowledge_entries (project_id, category, title, content, files, updated_by, pinned, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    p1,
-    'architecture',
-    'App Architecture & Multi-CLI Subscription Engine',
-    `# Omni CLI\n\n- **Stack**: Electron 44 + electron-vite + React 19 + Tailwind CSS v4 + Node built-in \`node:sqlite\`.\n- **Core Modules**:\n  - \`src/core/clis.ts\`: Detects installed & authenticated subscription CLIs (\`claude\`, \`agy\`, \`codex\`, \`copilot\`), queries models, and tracks live 5-hour rolling window limits.\n  - \`src/core/knowledge.ts\`: Unified Project Knowledge Base synced to SQLite and \`.ai-kb/PROJECT_KNOWLEDGE.md\` so every AI CLI shares context seamlessly.\n  - \`src/core/projects.ts\`: Interactive threads + background task queue with isolated git worktrees and automatic CLI limit handover.\n  - \`src/core/terminal.ts\`: Embedded interactive terminal sessions per project/worktree.`,
-    'src/core/clis.ts, src/core/knowledge.ts, src/core/projects.ts, src/renderer/src/App.tsx',
-    'scanner',
-    1,
-    now,
-    now
-  )
-
-  db.prepare(
-    `INSERT INTO knowledge_entries (project_id, category, title, content, files, updated_by, pinned, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    p1,
-    'conventions',
-    'Verification & Coding Conventions',
-    `- Always run \`npm run typecheck && npm run build\` to verify changes.\n- Keep subscription CLIs greyed out in the UI when \`authenticated === false\`.\n- Preserve shared knowledge base entries in \`.ai-kb/PROJECT_KNOWLEDGE.md\` when switching between Claude Code and Antigravity.`,
-    'package.json, tsconfig.json',
-    'scanner',
-    1,
-    now,
-    now
-  )
-
-  if (personalAppFolder) {
-    const p2 = Number(
-      db
-        .prepare(
-          `INSERT INTO projects (name, folder, notes, check_cmd, default_cli, default_model, default_mode, default_checkout, sort, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          'Personal App',
-          personalAppFolder,
-          'Personal Hub desktop app — tasks, leads, calendar, mail, deployments, and local offline SQLite storage.',
-          'npm run typecheck && npm run build',
-          'claude',
-          'claude-opus-5-5',
-          'default',
-          'worktree',
-          2,
-          now
-        ).lastInsertRowid
-    )
-
-    db.prepare(
-      `INSERT INTO knowledge_entries (project_id, category, title, content, files, updated_by, pinned, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      p2,
-      'architecture',
-      'Personal Hub Overview & Structure',
-      `# Personal Hub (D:\\Personal App)\n\n- **Stack**: Electron + Vite + React 19 + Tailwind v4 + \`node:sqlite\` (\`src/core/db.ts\`).\n- **Structure**:\n  - \`src/core/\`: Backend services (tasks, leads, calendar, mail, money, deployments, projects).\n  - \`src/renderer/src/pages/\`: UI pages for each domain.\n  - \`src/shared/\`: Shared utilities and TypeScript types.`,
-      'src/core/db.ts, src/core/api.ts, src/renderer/src/App.tsx',
-      'scanner',
-      1,
-      now,
-      now
-    )
-  }
 }
 
 type Param = string | number | null

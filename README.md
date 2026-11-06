@@ -8,7 +8,7 @@
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg?logo=electron)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC.svg?logo=tailwind-css)](https://tailwindcss.com/)
-[![License](https://img.shields.io/badge/License-Private-lightgrey.svg)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
 
@@ -34,7 +34,7 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 - Model picker with real CLI model catalogs and granular **reasoning effort level** controls (`low`, `medium`, `high`, `xhigh`, `max`).
 - Permission mode toggling (`default`, `accept-edits`, `bypass`, `plan`).
 - Visual indicators showing CLI authentication status (unauthenticated subscriptions remain disabled/greyed out).
-- **Voice input** (mic button in the composer): click, speak, click again to insert. Transcription runs locally with **NVIDIA Parakeet TDT 0.6B** (int8, via sherpa-onnx) — about 1 s per phrase on CPU, the model stays loaded between dictations. It reuses the model and Python venv from a Voice Studio install (`D:\Voice Studio\VoiceStudio`, or set `OMNI_VOICE_STUDIO`); nothing is downloaded. Without it, Windows falls back to the built-in (much less accurate) System.Speech recognizer. Code: `src/core/voice.ts`, `src/renderer/src/lib/recorder.ts`.
+- **Voice input** (mic button in the composer): click, speak, click again to insert. Transcription runs locally with **NVIDIA Parakeet TDT 0.6B** (int8, via sherpa-onnx) — about 1 s per phrase on CPU, the model stays loaded between dictations. It reuses the model and Python venv from an existing Voice Studio install (looked up in `~/Voice Studio/VoiceStudio`, `C:\` / `D:\Voice Studio\VoiceStudio`, or the folder in the `OMNI_VOICE_STUDIO` environment variable); nothing is downloaded. Without it, Windows falls back to the built-in (much less accurate) System.Speech recognizer. Code: `src/core/voice.ts`, `src/renderer/src/lib/recorder.ts`.
 - **Team updates (Pull & restart)**: the title-bar update button fetches GitHub in the background and flags commits merged into the branch's upstream (or the remote's default branch, `main`/`master`) that you haven't pulled, listing their commit messages. One click pulls them (fast-forward, or replays your local commits on top when you've diverged — aborting cleanly on conflicts), reinstalls dependencies if needed, typechecks, builds and restarts. **Push** now rebases onto teammates' pushes first and writes every unpushed AI-agent commit message into the auto-commit body, so conventional commits stay visible in history.
 - **Single instance**: only one Omni CLI runs at a time — launching it again just focuses the open window. After an in-app update the app restarts itself (the new process waits for the old one to exit, then takes over).
 
@@ -90,6 +90,7 @@ Omni CLI (Electron App)
 │   ├── knowledge.ts    - Markdown & SQLite synchronization (.ai-kb)
 │   ├── gitops.ts       - Asynchronous Git status, diffs, branches, and worktrees
 │   ├── terminal.ts     - Node-pty session lifecycle management
+│   ├── proc.ts         - Shell-free launching of AI CLIs (npm .cmd shims on Windows)
 │   ├── scheduler.ts    - Background cron & scheduled prompt runner
 │   └── db.ts           - Fast embedded persistence via node:sqlite
 └── Renderer (src/renderer/)
@@ -111,13 +112,13 @@ Omni CLI (Electron App)
 ### Prerequisites
 
 - **Operating System**: Windows 10/11 or macOS 12+ (Apple Silicon M-Series & Intel)
-- **Node.js**: `v20.x` or later (LTS recommended)
+- **Node.js**: `v22.12` or later (needed by the Vite 8 / TypeScript 7 toolchain; the app itself runs on Electron's bundled Node)
 - **npm** or compatible package manager
 - **Git**: Installed and available in your system `PATH`
 - **Supported AI CLIs** (install whichever you use):
   - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) (`claude`)
-  - [Google Antigravity](https://github.com) (`agy`)
-  - [OpenAI Codex](https://github.com/openai) (`codex`)
+  - [Google Antigravity](https://antigravity.google) (`agy`)
+  - [OpenAI Codex](https://github.com/openai/codex) (`codex`)
   - [GitHub Copilot CLI](https://github.com/github/copilot-cli) (`copilot`)
 
 ### Installation
@@ -125,13 +126,21 @@ Omni CLI (Electron App)
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/YehiaTarekKhedr/omnicli.git
-   cd "Omni CLI"
+   cd omnicli
    ```
 
 2. **Install dependencies**:
    ```bash
    npm install
    ```
+
+3. **Run it**:
+   ```bash
+   npm run dev
+   ```
+   On Windows you can also double-click `Start Omni CLI.bat` (builds once, then launches without a console window).
+
+4. **Add a project**: a fresh install starts empty. Create a project, point it at a local folder, and sign in to whichever CLIs you use (each CLI keeps its own login; Omni CLI never asks for passwords or API keys).
 
 ---
 
@@ -176,6 +185,13 @@ Omni CLI (Electron App)
 
 ## 🔒 Security & Privacy
 
+> [!WARNING]
+> Omni CLI drives AI agents that edit files and run commands in your projects. **Bypass** permission mode (and Antigravity / Copilot runs, which use their own auto-approve flags) let the agent act without asking: only use them on code you trust, ideally in a worktree. Prompts, knowledge-base text and files in a repository you cloned can contain prompt-injection instructions aimed at the agent.
+
+- **Hardened Electron shell**: the UI runs sandboxed with context isolation, no Node integration and a strict Content-Security-Policy (no remote or inline scripts). Only the app's own page can call the IPC bridge (calls from webviews, iframes or navigated-away pages are refused, and API paths can't walk into prototypes). Navigations and pop-ups never load inside the app: web links open in your system browser. The browser-preview `<webview>` is sandboxed and can only load `http(s)` pages with Omni CLI's own element-picker preload.
+- **No shell injection**: AI CLIs are started without a shell. On Windows, npm `.cmd` shims are resolved to the underlying script, so quotes, `&`, `%VAR%` or newlines in a prompt are passed through literally and never executed.
+- **Approvals bridge**: Claude Code permission prompts reach the app through a loopback-only (`127.0.0.1`) server that requires a random per-launch token.
+- **Limited shell access from the UI**: "Open" only opens folders, images and text files, never executables or shortcuts.
 - **Phone notifications are opt-in**: the ntfy topic is empty by default. Use *Settings → Generate* to create a random, unguessable topic. ntfy topics are unauthenticated, so anyone who knows the name can read the messages; use a self-hosted/ACL-protected server for sensitive content.
 - **Local-First Architecture**: Your projects, credentials, and knowledge base stay on your machine.
 - **Embedded Database**: Local persistent storage runs directly inside Node's embedded `node:sqlite`.

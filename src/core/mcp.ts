@@ -1,9 +1,9 @@
-import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { CliId, McpServerEntry } from '@shared/types'
 import { findCliExecutable } from './clis'
+import { execCli } from './proc'
 
 /**
  * One MCP server list for every CLI. Claude and Antigravity are changed through their own `mcp add/remove`
@@ -74,7 +74,7 @@ function listAgy(): Promise<Def[]> {
   const exe = findCliExecutable('agy')
   if (!exe) return Promise.resolve([])
   return new Promise((resolve) => {
-    execFile(exe, ['mcp', 'list'], { windowsHide: true, timeout: 15_000 }, (_e, out) => {
+    execCli(exe, ['mcp', 'list'], { windowsHide: true, timeout: 15_000 }, (_e, out) => {
       const defs: Def[] = []
       for (const line of (out || '').split(/\r?\n/)) {
         const m = line.trim().match(/^([\w.-]+)[\s:]+(.*)$/)
@@ -87,7 +87,7 @@ function listAgy(): Promise<Def[]> {
 
 const exec = (exe: string, args: string[]): Promise<string> =>
   new Promise((resolve, reject) => {
-    execFile(exe, args, { windowsHide: true, timeout: 30_000 }, (e, out, err) => (e ? reject(new Error((err || e.message).trim().split('\n').slice(-2).join(' '))) : resolve(out))).stdin?.end()
+    execCli(exe, args, { windowsHide: true, timeout: 30_000 }, (e, out, err) => (e ? reject(new Error((err || e.message).trim().split('\n').slice(-2).join(' '))) : resolve(out))).stdin?.end()
   })
 
 const tomlStr = (s: string): string => JSON.stringify(s)
@@ -153,6 +153,9 @@ export const mcp = {
     const name = def.name.trim()
     if (!/^[\w.-]+$/.test(name)) throw new Error('Server names may only use letters, numbers, dot, dash and underscore')
     if (def.type === 'http' ? !def.url : !def.command) throw new Error(def.type === 'http' ? 'Enter the server URL' : 'Enter the command that starts the server')
+    // Keys are written unquoted into config.toml and passed as KEY=value flags, so keep them to plain env-var names
+    const badKey = Object.keys(def.env ?? {}).find((k) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+    if (badKey !== undefined) throw new Error(`"${badKey}" is not a valid environment variable name`)
     const errors: string[] = []
     for (const cli of targets) {
       try {

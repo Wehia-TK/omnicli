@@ -174,10 +174,11 @@ export const terminal = {
     const folder = cwd && existsSync(cwd) ? cwd : process.cwd()
 
     if (process.platform === 'darwin') {
-      const fullCmd = `${exe} ${extraArgs}`.trim()
+      // AppleScript string literal; `quoted form of` then makes each value a single safe shell word
+      const as = (s: string): string => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
       const script = `tell application "Terminal"
         activate
-        do script "cd " & quoted form of "${folder.replace(/"/g, '\\"')}" & " && " & quoted form of "${fullCmd.replace(/"/g, '\\"')}"
+        do script "cd " & quoted form of ${as(folder)} & " && " & quoted form of ${as(exe)} & ${as(extraArgs ? ` ${extraArgs}` : '')}
       end tell`
       const child = spawn('osascript', ['-e', script], { stdio: 'ignore' })
       child.unref()

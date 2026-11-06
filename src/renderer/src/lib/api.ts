@@ -59,6 +59,8 @@ export const api = {
   app: {
     chooseFolder: () => call<string | null>('app.chooseFolder'),
     openPath: (target: string) => call<true>('app.openPath', target),
+    /** Opens an http(s)/mailto link in the system browser. */
+    openExternal: (url: string) => call<true>('app.openExternal', url),
     setTheme: (theme: 'dark' | 'light') => call<true>('app.setTheme', theme),
     pickerPreload: () => call<string>('app.pickerPreload')
   },

@@ -2,7 +2,7 @@
   "name": "omni-cli",
   "productName": "Omni CLI",
   "version": "1.0.0",
-  "description": "Centralized desktop workspace for all your AI CLI subscriptions \u2014 Claude Code, Antigravity, Codex, and Copilot \u2014 with live limits, git worktrees, and a unified Project Knowledge Base.",
+  "description": "Centralized desktop workspace for all your AI CLI subscriptions — Claude Code, Antigravity, Codex, and Copilot — with live limits, git worktrees, and a unified Project Knowledge Base.",
   "main": "out/main/index.js",
   "private": true,
   "license": "MIT",
@@ -62,8 +62,6 @@
     "@lydell/node-pty": "^1.2.0-beta.18",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "date-fns": "^4.4.0",
-    "dompurify": "^3.4.17",
     "lucide-react": "^1.59.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

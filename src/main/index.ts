@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, shell } from 'electron'
-import { existsSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, session, shell } from 'electron'
+import { existsSync, statSync, unlinkSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { coreApi } from '../core/api'
 import { initAccounts } from '../core/accounts'
 import { onDbChange, openDatabase } from '../core/db'
@@ -77,6 +78,74 @@ function ensureWindowsShortcut(appRoot: string): void {
 
 let mainWindow: BrowserWindow | null = null
 
+// ───────────────────────────── Security boundaries ─────────────────────────────
+
+const RENDERER_HTML = join(__dirname, '../renderer/index.html')
+const PICKER_PRELOAD = join(__dirname, '../preload/picker.js')
+const samePath = (a: string, b: string): boolean =>
+  process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b)
+
+/** True only for Omni CLI's own UI (the built index.html, or the electron-vite dev server). */
+function isAppUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw)
+    const dev = process.env.ELECTRON_RENDERER_URL
+    if (dev && u.origin === new URL(dev).origin) return true
+    return u.protocol === 'file:' && decodeURIComponent(u.pathname).toLowerCase() === decodeURIComponent(pathToFileURL(RENDERER_HTML).pathname).toLowerCase()
+  } catch {
+    return false
+  }
+}
+
+/** Links leave the app through the system browser, and only web / mail links (never file:// or custom schemes). */
+function openExternalSafe(raw: string): void {
+  try {
+    const u = new URL(raw)
+    if (['https:', 'http:', 'mailto:'].includes(u.protocol)) void shell.openExternal(u.href)
+  } catch {
+    // not a URL
+  }
+}
+
+/**
+ * The renderer holds a bridge that can run commands, so no other page may ever load inside an app window:
+ * popups and off-app navigations open in the system browser instead, and the preview <webview> can't escalate itself.
+ */
+app.on('web-contents-created', (_e, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    openExternalSafe(url)
+    return { action: 'deny' }
+  })
+  if (contents.getType() === 'webview') return // the browser preview may navigate wherever the user points it
+  contents.on('will-navigate', (ev, url) => {
+    if (isAppUrl(url)) return
+    ev.preventDefault()
+    openExternalSafe(url)
+  })
+  contents.on('will-redirect', (ev, url) => {
+    if (!isAppUrl(url)) ev.preventDefault()
+  })
+  contents.on('will-attach-webview', (ev, prefs, params) => {
+    if (prefs.preload && !samePath(prefs.preload, PICKER_PRELOAD)) delete prefs.preload
+    prefs.nodeIntegration = false
+    prefs.nodeIntegrationInSubFrames = false
+    prefs.contextIsolation = true
+    prefs.sandbox = true
+    prefs.webSecurity = true
+    if (params.src && !/^(https?:|about:blank)/i.test(params.src)) ev.preventDefault()
+  })
+})
+
+/** Folders, images and plain-text files only: never hand an executable or shortcut to the OS shell. */
+const OPENABLE_FILE = /\.(png|jpe?g|gif|webp|bmp|md|txt|log|json)$/i
+function canOpenPath(target: string): boolean {
+  try {
+    return statSync(target).isDirectory() || OPENABLE_FILE.test(target)
+  } catch {
+    return false
+  }
+}
+
 let broadcastTimer: ReturnType<typeof setTimeout> | null = null
 
 /** Coalesce DB-change pings: a streaming run writes many rows per second, the UI only needs ~4 refreshes/s. */
@@ -107,8 +176,10 @@ function createWindow(): void {
     trafficLightPosition: isDarwin ? { x: 12, y: 12 } : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: true,
       webviewTag: true
     }
   })
@@ -150,7 +221,7 @@ function createWindow(): void {
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(RENDERER_HTML)
   }
 }
 
@@ -251,13 +322,25 @@ app.whenReady().then(async () => {
   })
   refreshGraphWatchers()
 
+  // The UI only ever needs the microphone (voice input); every other permission request is refused
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) =>
+    cb(permission === 'media' || permission === 'clipboard-sanitized-write' || permission === 'fullscreen')
+  )
+
   initTerminal((ev) => {
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send('terminal-output', ev)
     }
   })
 
-  ipcMain.handle('api', async (_event, path: string, args: unknown[]) => {
+  ipcMain.handle('api', async (event, path: unknown, rawArgs: unknown) => {
+    // Only Omni CLI's own top-level page may use the bridge (not the preview webview, iframes or a navigated-away page)
+    const frame = event.senderFrame
+    if (event.sender.getType() !== 'window' || !frame || frame !== event.sender.mainFrame || !isAppUrl(frame.url)) {
+      throw new Error('Blocked: API call from an untrusted frame')
+    }
+    if (typeof path !== 'string' || !/^[A-Za-z]+(\.[A-Za-z]+)+$/.test(path)) throw new Error('Invalid API method')
+    const args = Array.isArray(rawArgs) ? rawArgs : []
     if (path === 'window.minimize') {
       const win = BrowserWindow.getFocusedWindow() ?? mainWindow
       win?.minimize()
@@ -296,18 +379,25 @@ app.whenReady().then(async () => {
       return true
     }
     if (path === 'app.pickerPreload') {
-      return `file:///${join(__dirname, '../preload/picker.js').split('\\').join('/')}`
+      return pathToFileURL(PICKER_PRELOAD).href
     }
     if (path === 'app.openPath') {
       const target = String(args[0] ?? '')
-      if (target) await shell.openPath(target)
+      if (!target || !canOpenPath(target)) throw new Error('Only folders, images and text files can be opened from here')
+      const err = await shell.openPath(target)
+      if (err) throw new Error(err)
+      return true
+    }
+    if (path === 'app.openExternal') {
+      openExternalSafe(String(args[0] ?? ''))
       return true
     }
 
-    const parts = path.split('.')
+    // Walk own properties only, never into prototypes (constructor, __proto__, …)
     let cur: unknown = coreApi
-    for (const p of parts) {
-      cur = (cur as Record<string, unknown>)?.[p]
+    for (const p of path.split('.')) {
+      if (!cur || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, p)) throw new Error(`Unknown API method: ${path}`)
+      cur = (cur as Record<string, unknown>)[p]
     }
     if (typeof cur !== 'function') {
       throw new Error(`Unknown API method: ${path}`)

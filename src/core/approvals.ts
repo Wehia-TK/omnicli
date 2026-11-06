@@ -80,7 +80,10 @@ export function initApprovals(dataDir: string, changed: (req?: ApprovalRequest) 
       return
     }
     let raw = ''
-    req.on('data', (d) => (raw += d))
+    req.on('data', (d) => {
+      raw += d
+      if (raw.length > 8 * 1024 * 1024) req.destroy() // a tool call is never this big
+    })
     req.on('end', () => {
       let body: { task?: number; tool_name?: string; input?: Record<string, unknown> } = {}
       try {

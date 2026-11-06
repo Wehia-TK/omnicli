@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { api } from './api'
 
 type Opts = {
   onToggle?: (line: number, done: boolean) => void
@@ -23,7 +24,8 @@ function inline(text: string, key: string, o: Opts): ReactNode[] {
           className="text-indigo-400 underline hover:text-indigo-300"
           onClick={(e) => {
             e.preventDefault()
-            o.onLink?.(href)
+            if (o.onLink) o.onLink(href)
+            else void api.app.openExternal(href).catch(() => undefined)
           }}
         >
           {m[1] ?? href}
