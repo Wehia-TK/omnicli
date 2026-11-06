@@ -1,4 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+
+/** Cryptographically random, unguessable ntfy topic name. */
+function randomNtfyTopic(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return 'omni-' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
 import {
   AlertTriangle,
   Archive,
@@ -1907,7 +1913,7 @@ function SettingsModal({ settings, onClose }: { settings: Settings; onClose: () 
 
         <Field
           label="Phone notifications (ntfy topic)"
-          hint="Install the free ntfy app, subscribe to a hard-to-guess topic, and paste it here. You'll get a push when runs finish, fail, a queue completes, or an approval is needed. Leave empty to turn off."
+          hint="Install the free ntfy app, click Generate for a random topic (topics are public to anyone who knows the name, so never reuse a guessable one), subscribe to it in the app, then Save. You'll get a push when runs finish, fail, a queue completes, or an approval is needed. Leave empty to turn off."
         >
           <div className="flex gap-2">
             <input
@@ -1923,6 +1929,9 @@ function SettingsModal({ settings, onClose }: { settings: Settings; onClose: () 
               onClick={() => act(api.settings.update({ ntfyTopic: s.ntfyTopic }).then(() => api.schedules.testPhone()), 'Test notification sent')}
             >
               Test
+            </button>
+            <button type="button" className="btn h-9" onClick={() => setS({ ...s, ntfyTopic: randomNtfyTopic() })}>
+              Generate
             </button>
           </div>
         </Field>

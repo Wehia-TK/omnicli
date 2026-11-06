@@ -9,7 +9,7 @@ export const DEFAULT_SETTINGS: Settings = {
   kbPromptMode: 'compact',
   useGraphify: true,
   graphifyWatch: true,
-  ntfyTopic: '***REMOVED***',
+  ntfyTopic: '',
   agyFamilyFallback: true,
   defaultPermissionMode: 'default',
   defaultCheckoutMode: 'local',

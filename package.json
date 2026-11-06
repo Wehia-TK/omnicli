@@ -5,6 +5,8 @@
   "description": "Centralized desktop workspace for all your AI CLI subscriptions \u2014 Claude Code, Antigravity, Codex, and Copilot \u2014 with live limits, git worktrees, and a unified Project Knowledge Base.",
   "main": "out/main/index.js",
   "private": true,
+  "license": "MIT",
+  "author": "Yehia Tarek Khedr",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

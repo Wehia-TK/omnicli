@@ -124,7 +124,7 @@ Omni CLI (Electron App)
 
 1. **Clone the repository**:
    ```bash
-   git clone <repo-url>
+   git clone https://github.com/YehiaTarekKhedr/omnicli.git
    cd "Omni CLI"
    ```
 
@@ -176,6 +176,13 @@ Omni CLI (Electron App)
 
 ## 🔒 Security & Privacy
 
+- **Phone notifications are opt-in**: the ntfy topic is empty by default. Use *Settings → Generate* to create a random, unguessable topic. ntfy topics are unauthenticated, so anyone who knows the name can read the messages; use a self-hosted/ACL-protected server for sensitive content.
 - **Local-First Architecture**: Your projects, credentials, and knowledge base stay on your machine.
 - **Embedded Database**: Local persistent storage runs directly inside Node's embedded `node:sqlite`.
 - **Credential Safety**: Authentication relies on the respective CLI tools' existing local login sessions (OAuth tokens and configurations are never stored insecurely or transmitted to third-party servers).
+
+---
+
+## 📄 License
+
+Released under the [MIT License](LICENSE).

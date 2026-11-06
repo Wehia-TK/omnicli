@@ -4,3 +4,12 @@ release
 data
 .DS_Store
 *.lnk
+
+# local-only / personal
+.env
+.env.*
+*.log
+.ai-kb/
+graphify-out/
+.claude/
+_*.py
