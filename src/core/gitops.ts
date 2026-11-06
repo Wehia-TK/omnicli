@@ -1,5 +1,6 @@
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { existsSync, writeFileSync } from 'node:fs'
+import { EOL } from 'node:os'
 import { join } from 'node:path'
 import type { GitStatusInfo } from '@shared/types'
 import { get, nowLocal, run } from './db'
@@ -137,9 +138,15 @@ export const gitops = {
     run('UPDATE projects SET git_remote_url = ? WHERE id = ?', remote, projectId)
 
     if (!isRepo(folder)) await gitops.init(projectId)
+    // Subjects of commits the AI agents already made that haven't reached the remote yet
+    const unpushed = gitSync(folder, ['log', '--format=%s', '@{u}..HEAD'], true).trim() || gitSync(folder, ['log', '--format=%s', '--not', '--remotes', 'HEAD'], true).trim()
+    const agentCommits = unpushed.split(/\r?\n/).filter(Boolean)
     gitSync(folder, ['add', '-A'])
     if (gitSync(folder, ['status', '--porcelain'], true).trim()) {
-      gitSync(folder, ['commit', '-m', message?.trim() || `Update from Omni CLI (${nowLocal().replace('T', ' ')})`])
+      const subject = message?.trim() || `Update from Omni CLI (${nowLocal().replace('T', ' ')})`
+      const list = agentCommits.map((c) => `- ${c}`).join(EOL)
+      const body = agentCommits.length ? `${EOL}${EOL}Includes ${agentCommits.length} commit(s):${EOL}${list}` : ''
+      gitSync(folder, ['commit', '-m', subject + body])
     }
     if (!gitSync(folder, ['rev-parse', '--verify', 'HEAD'], true).trim()) throw new Error('Nothing to push yet — the repository has no commits')
 
@@ -148,6 +155,18 @@ export const gitops = {
     else if (current !== remote) gitSync(folder, ['remote', 'set-url', 'origin', remote])
 
     const branch = gitSync(folder, ['symbolic-ref', '--short', 'HEAD'], true).trim() || 'main'
+    // Teammates may have pushed meanwhile: replay our commits on top instead of failing with "non-fast-forward"
+    if ((await gitAsync(folder, ['fetch', 'origin', branch]).then(() => true, () => false)) && gitSync(folder, ['rev-parse', '--verify', '--quiet', `origin/${branch}`], true).trim()) {
+      const behind = Number(gitSync(folder, ['rev-list', '--count', `HEAD..origin/${branch}`], true).trim() || 0)
+      if (behind > 0) {
+        try {
+          await gitAsync(folder, ['rebase', '--autostash', `origin/${branch}`])
+        } catch (e) {
+          gitSync(folder, ['rebase', '--abort'], true)
+          throw new Error(`Others pushed to ${branch} and their changes conflict with yours. Pull them first (update button), then push again. (${(e as Error).message})`)
+        }
+      }
+    }
     await gitAsync(folder, ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`])
     run('UPDATE projects SET git_remote_url = git_remote_url WHERE id = ?', projectId) // notify UI
     return { ...(await gitops.status(projectId)), pushed: `${branch} → ${remote}` }

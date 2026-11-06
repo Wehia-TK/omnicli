@@ -101,6 +101,20 @@ const parseLog = (raw: string): { hash: string; subject: string }[] =>
     .filter(Boolean)
     .map((l) => ({ hash: l.split('\t')[0], subject: l.split('\t').slice(1).join('\t') }))
 
+/**
+ * The ref teammates merge into: the branch's upstream, else the remote's default branch (origin/HEAD → origin/main → origin/master).
+ * Returns '' when there is no remote to compare against.
+ */
+async function trackingRef(): Promise<string> {
+  const upstream = await git(['rev-parse', '--abbrev-ref', '@{u}'])
+  if (upstream.ok && upstream.out) return upstream.out
+  if (!(await git(['remote', 'get-url', 'origin'])).ok) return ''
+  const head = await git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+  if (head.ok && head.out) return head.out
+  for (const ref of ['origin/main', 'origin/master']) if ((await git(['rev-parse', '--verify', '--quiet', ref])).ok) return ref
+  return ''
+}
+
 export const updater = {
   check: async (fetchRemote = true): Promise<UpdateInfo> => {
     const base: UpdateInfo = {
@@ -126,11 +140,11 @@ export const updater = {
 
     let remoteCommits: { hash: string; subject: string }[] = []
     let remote = ''
-    const upstream = await git(['rev-parse', '--abbrev-ref', '@{u}'])
-    if (upstream.ok && upstream.out) {
-      remote = upstream.out
-      if (fetchRemote) await git(['fetch', '--quiet'], 30_000)
-      remoteCommits = parseLog((await git(['log', '--format=%h%x09%s', 'HEAD..@{u}'])).out)
+    if (fetchRemote && (await git(['remote', 'get-url', 'origin'])).ok) await git(['fetch', '--quiet', 'origin'], 30_000)
+    const tracking = await trackingRef()
+    if (tracking) {
+      remote = tracking
+      remoteCommits = parseLog((await git(['log', '--format=%h%x09%s', `HEAD..${tracking}`])).out)
     }
 
     const changedFiles = files.filter(needsRestartFor)
@@ -159,9 +173,20 @@ export const updater = {
       if (!info.supported) throw new Error(info.reason)
 
       if (info.remoteCommits.length) {
-        const pull = await git(['pull', '--ff-only'], 120_000)
-        if (!pull.ok) throw new Error(`Could not pull ${info.remote}: ${pull.out.split('\n').slice(-3).join(' ')}`)
-        steps.push(`Pulled ${info.remoteCommits.length} commit(s) from ${info.remote}`)
+        // Fast-forward when possible; if local commits/edits diverged (several people working at once), replay them on top.
+        const ff = await git(['merge', '--ff-only', info.remote], 120_000)
+        if (ff.ok) {
+          steps.push(`Pulled ${info.remoteCommits.length} commit(s) from ${info.remote}`)
+        } else {
+          const rb = await git(['rebase', '--autostash', info.remote], 120_000)
+          if (!rb.ok) {
+            await git(['rebase', '--abort'])
+            throw new Error(
+              `Could not merge ${info.remote} into your changes (conflicts). Nothing was changed — resolve it in a terminal with "git pull --rebase".\n${rb.out.split('\n').slice(-3).join(' ')}`
+            )
+          }
+          steps.push(`Pulled ${info.remoteCommits.length} commit(s) from ${info.remote} and replayed your local work on top`)
+        }
       }
 
       const depsChanged =

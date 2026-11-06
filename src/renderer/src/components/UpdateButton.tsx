@@ -142,7 +142,7 @@ function UpdateModal({
           {info?.available && (
             <button type="button" className="btn btn-primary h-8 text-[12px]" onClick={() => void apply()} disabled={applying}>
               {applying ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
-              {applying ? 'Updating…' : 'Update & restart'}
+              {applying ? 'Updating…' : info.remoteCommits.length ? 'Pull & restart' : 'Update & restart'}
             </button>
           )}
         </>
@@ -184,7 +184,7 @@ function UpdateModal({
           )}
 
           {info.remoteCommits.length > 0 && (
-            <Section title={`New on ${info.remote}`}>
+            <Section title={`Merged on ${info.remote} — ready to pull`}>
               {info.remoteCommits.map((c) => (
                 <CommitRow key={c.hash} {...c} />
               ))}
