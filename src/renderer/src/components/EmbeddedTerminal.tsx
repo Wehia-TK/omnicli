@@ -12,11 +12,13 @@ interface EmbeddedTerminalProps {
   cwd: string
   clis: CliSubscriptionStatus[]
   initialCommand?: string
+  /** Start the session as this saved account's CLI login (its own config folder) instead of a plain shell */
+  loginAccountId?: number
   onClose?: () => void
 }
 
 /** A real terminal (xterm.js on a ConPTY): colours, cursor movement, interactive logins and TUIs all work. */
-export function EmbeddedTerminal({ sessionId, cwd, clis, initialCommand, onClose }: EmbeddedTerminalProps): React.JSX.Element {
+export function EmbeddedTerminal({ sessionId, cwd, clis, initialCommand, loginAccountId, onClose }: EmbeddedTerminalProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -68,7 +70,8 @@ export function EmbeddedTerminal({ sessionId, cwd, clis, initialCommand, onClose
     const ro = new ResizeObserver(() => doFit())
     ro.observe(hostRef.current)
 
-    api.terminal.start(sessionId, cwd, initialCommand, term.cols, term.rows)
+    if (loginAccountId) void api.accounts.login(loginAccountId, sessionId, term.cols, term.rows)
+    else api.terminal.start(sessionId, cwd, initialCommand, term.cols, term.rows)
 
     return () => {
       off()
@@ -131,7 +134,8 @@ export function EmbeddedTerminal({ sessionId, cwd, clis, initialCommand, onClose
             onClick={() => {
               termRef.current?.reset()
               const t = termRef.current
-              api.terminal.start(sessionId, cwd, undefined, t?.cols, t?.rows)
+              if (loginAccountId) void api.accounts.login(loginAccountId, sessionId, t?.cols, t?.rows)
+              else api.terminal.start(sessionId, cwd, undefined, t?.cols, t?.rows)
             }}
             title="Restart terminal"
             className="btn btn-ghost btn-icon h-6 w-6"

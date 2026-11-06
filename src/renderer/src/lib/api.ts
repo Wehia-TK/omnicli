@@ -7,6 +7,7 @@ import type {
   Schedule,
   SearchHit,
   CheckoutMode,
+  CliAccount,
   CliId,
   CliSubscriptionStatus,
   EffortLevel,
@@ -106,6 +107,16 @@ export const api = {
   settings: {
     get: () => call<Settings>('settings.get'),
     update: (patch: Partial<Settings>) => call<Settings>('settings.update', patch)
+  },
+  accounts: {
+    list: () => call<CliAccount[]>('accounts.list'),
+    add: (cli: CliId, label: string) => call<CliAccount>('accounts.add', cli, label),
+    rename: (id: number, label: string) => call<true>('accounts.rename', id, label),
+    move: (id: number, dir: -1 | 1) => call<true>('accounts.move', id, dir),
+    remove: (id: number) => call<true>('accounts.remove', id),
+    clearLimit: (id: number) => call<true>('accounts.clearLimit', id),
+    login: (id: number, sessionId: string, cols?: number, rows?: number) =>
+      call<{ sessionId: string; pty: boolean }>('accounts.login', id, sessionId, cols, rows)
   },
   clis: {
     statusAll: (forceRefresh = false) => call<CliSubscriptionStatus[]>('clis.statusAll', forceRefresh),

@@ -44,6 +44,12 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 - Per-model and per-family quota bucket breakdown (e.g. Antigravity Claude vs. Gemini quotas).
 - Instant visual warnings before hitting provider rate-limit walls.
 
+#### Multiple accounts per provider (Claude Code & Codex)
+- In **Settings → Extra accounts**, add more logins for the same provider (e.g. a second Claude Max or ChatGPT plan) and sign in to each from the built-in terminal. No passwords are stored: each account gets its own isolated config folder (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`) holding the CLI's own OAuth login.
+- Fallback order: your normal CLI login → extra accounts in the order you set → only then the existing handover to a different provider/model.
+- Switching account starts a fresh CLI session (sessions live in the account's config folder) and re-sends task context like a handover. Rate-limit locks are tracked per account and can be cleared individually.
+- Copilot and Antigravity aren't supported yet (no confirmed per-account config override).
+
 ### 3. 🧠 Unified Cross-AI Knowledge Base
 - Bi-directional sync between local storage (`node:sqlite`) and `.ai-kb/PROJECT_KNOWLEDGE.md`.
 - Maintains architectural notes, repository graphs, conventions, decisions, and cross-AI handoff logs.
@@ -152,7 +158,7 @@ Omni CLI (Electron App)
 ├── build/                      # Build assets and application icons
 ├── resources/                  # Static runtime resources
 ├── src/
-│   ├── core/                   # Backend engines (CLIs, DB, git, knowledge base, PTY)
+│   ├── core/                   # Backend engines (CLIs, accounts, DB, git, knowledge base, PTY)
 │   ├── main/                   # Electron main process entry point & IPC handlers
 │   ├── preload/                # Context-isolated secure preload bridge
 │   ├── renderer/               # React UI components, hooks, styles, and views

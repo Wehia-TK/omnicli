@@ -45,6 +45,7 @@ import type {
   Settings
 } from '@shared/types'
 import { CliAvatar, CliSpinner } from './components/CliAvatars'
+import { AccountsSection } from './components/AccountsSection'
 import { EmbeddedTerminal } from './components/EmbeddedTerminal'
 import { GitControls } from './components/GitControls'
 import { ApprovalCards, BrowserPreview, DiffReview, ImageThumb, McpModal, PrButton, RulesModal, SchedulesPanel, SearchModal, SkillsModal } from './components/Workbench'
@@ -1877,6 +1878,8 @@ function SettingsModal({ settings, onClose }: { settings: Settings; onClose: () 
             </select>
           </Field>
         </div>
+
+        <AccountsSection />
 
         <Field
           label="Knowledge base in prompts"

@@ -60,6 +60,20 @@ export interface CliLimitInfo {
   modelBuckets?: ModelLimitBucket[]
 }
 
+/** An extra, isolated login for a CLI (its own config folder), used as a fallback before switching provider. */
+export interface CliAccount {
+  id: number
+  cli: CliId
+  label: string
+  config_dir: string
+  sort: number
+  created_at: string
+  authenticated: boolean
+  accountLabel: string
+  limited: boolean
+  resetsAt: string | null
+}
+
 export interface Schedule {
   id: number
   project_id: number
@@ -207,6 +221,8 @@ export interface ProjectTask {
   session_id: string | null
   agy_conversation: string | null
   codex_thread?: string | null
+  /** cli_accounts.id used by the last run (0 = the CLI's primary login) */
+  account_id?: number
   compare_group?: string | null
   pr_url?: string | null
   branch: string | null

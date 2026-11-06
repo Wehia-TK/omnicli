@@ -162,6 +162,17 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_queued_messages_task ON queued_messages(task_id, id);
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS cli_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cli TEXT NOT NULL,
+    label TEXT NOT NULL,
+    config_dir TEXT NOT NULL DEFAULT '',
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  ALTER TABLE project_tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0;
   `
 ]
 

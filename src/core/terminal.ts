@@ -81,7 +81,7 @@ export const terminal = {
   isPty: (): boolean => Boolean(loadPty()),
 
   /** Start or restart an interactive shell session in `cwd`. */
-  start: (sessionId: string, cwd: string, initialCommand?: string, cols = 120, rows = 30): { sessionId: string; cwd: string; pty: boolean } => {
+  start: (sessionId: string, cwd: string, initialCommand?: string, cols = 120, rows = 30, extraEnv: Record<string, string> = {}): { sessionId: string; cwd: string; pty: boolean } => {
     close(sessionId)
     const workDir = cwd && existsSync(cwd) ? cwd : process.cwd()
     const pty = loadPty()
@@ -92,7 +92,7 @@ export const terminal = {
         cols: Math.max(20, cols),
         rows: Math.max(5, rows),
         cwd: workDir,
-        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+        env: { ...process.env, ...extraEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
         ...(isWin ? { useConpty: true } : {})
       })
       sessions.set(sessionId, { cwd: workDir, pty: term })
@@ -107,8 +107,8 @@ export const terminal = {
 
     // Fallback: plain pipes (no TUI support)
     const proc = isWin
-      ? spawn('powershell.exe', ['-NoLogo', '-NoExit', '-Command', '-'], { cwd: workDir, windowsHide: true, env: { ...process.env, TERM: 'xterm-256color' } })
-      : spawn(defaultShell, ['-i'], { cwd: workDir, env: { ...process.env, TERM: 'xterm-256color' } })
+      ? spawn('powershell.exe', ['-NoLogo', '-NoExit', '-Command', '-'], { cwd: workDir, windowsHide: true, env: { ...process.env, ...extraEnv, TERM: 'xterm-256color' } })
+      : spawn(defaultShell, ['-i'], { cwd: workDir, env: { ...process.env, ...extraEnv, TERM: 'xterm-256color' } })
     sessions.set(sessionId, { cwd: workDir, proc })
     emitter({ sessionId, stream: 'system', data: `Connected to ${isWin ? 'PowerShell' : defaultShell} in ${workDir} (basic mode)\r\n` })
     proc.stdout?.setEncoding('utf8')

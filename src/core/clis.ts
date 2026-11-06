@@ -1170,7 +1170,7 @@ function agyFamilyBudget(key: string): number {
 
 // ───────────────────────────── Rate-limit events (expiring) ─────────────────────────────
 
-interface RateEvent {
+export interface RateEvent {
   cli: string
   status: string
   utilization_pct: number | null
@@ -1180,7 +1180,7 @@ interface RateEvent {
 }
 
 /** A recorded rejection only counts until its reset time (or 5h after it was seen when the CLI gave no reset time). */
-function activeRateEvent(key: string, nowMs: number): RateEvent | undefined {
+export function activeRateEvent(key: string, nowMs: number): RateEvent | undefined {
   const ev = get<RateEvent>('SELECT * FROM cli_rate_events WHERE cli = ?', key)
   if (!ev) return undefined
   const until = ev.resets_at ? Date.parse(ev.resets_at) : Date.parse(ev.updated_at) + 5 * 3600_000
@@ -1633,6 +1633,11 @@ export function modelsForCli(cli: CliId): CliModel[] {
 }
 
 /** A CLI can take over work only if it is installed AND signed in. */
+/** Drop the cached status so account changes show up immediately. */
+export function clearAccountCaches(): void {
+  statusCache = null
+}
+
 export function isCliReady(cli: CliId): boolean {
   const exe = findCliExecutable(cli)
   return Boolean(exe) && detectAuth(cli, exe).authenticated
@@ -1751,7 +1756,7 @@ export const clis = {
   },
 
   clearRateLimit: (cli: CliId): true => {
-    run("DELETE FROM cli_rate_events WHERE cli = ? OR cli LIKE ?", cli, `${cli}:%`)
+    run('DELETE FROM cli_rate_events WHERE cli = ? OR cli LIKE ?', cli, `${cli}:%`)
     statusCache = null
     return true
   },

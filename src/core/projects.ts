@@ -17,6 +17,7 @@ import {
   recordCliUsage,
   resolveCliModelWithEffort
 } from './clis'
+import { MULTI_ACCOUNT_CLIS, accountEnv, accountLabel, hasExtraAccounts, isAccountLimited, pickAccountId, rateKey } from './accounts'
 import { skills } from './skills'
 import { approvalMcpConfig, cancelApprovals } from './approvals'
 import { updateGraphNow } from './graphwatch'
@@ -339,6 +340,26 @@ export function buildFullPrompt(cli: CliId, t: ProjectTask, p: Project, ask: str
   return applySkills(cli, t.mentions, buildPromptBody(cli, t, p, ask, cwd))
 }
 
+/** Tasks whose CLI session was dropped because the run moved to another account of the same CLI. */
+const accountSwitched = new Set<number>()
+
+/**
+ * Pick the login for this run: the primary account first, then saved accounts in order, skipping any that are
+ * signed out or rate limited. A session belongs to one account's config folder, so moving to a different account
+ * starts a fresh session and re-sends the task context like a handover.
+ */
+function chooseAccount(cli: CliId, taskId: number): number {
+  if (!MULTI_ACCOUNT_CLIS.includes(cli) || !hasExtraAccounts(cli)) return 0
+  const id = pickAccountId(cli, isCliReady(cli)) ?? 0
+  const t = getTask(taskId)
+  if (t.runner === cli && (t.account_id ?? 0) !== id) {
+    run('UPDATE project_tasks SET session_id = NULL, codex_thread = NULL WHERE id = ?', taskId)
+    accountSwitched.add(taskId)
+    appendLog(taskId, 'handoff', `Continuing on ${cliDisplayName(cli)} ${accountLabel(cli, id)} (the previous account is unavailable).`, cli)
+  }
+  return id
+}
+
 function buildPromptBody(cli: CliId, t: ProjectTask, p: Project, ask: string, cwd: string): string {
   const kbBlock = buildKnowledgePrompt(p.id, cwd)
   const mentionsBlock = formatMentionsContext(t.mentions, p.folder, cli)
@@ -358,8 +379,10 @@ function buildPromptBody(cli: CliId, t: ProjectTask, p: Project, ask: string, cw
 
   const lastRunner = t.runner
   // If continuing the exact same CLI conversation, keep the prompt concise
+  const switched = accountSwitched.has(t.id)
   if (
     lastRunner === cli &&
+    !switched &&
     ask &&
     ((cli === 'claude' && t.session_id) || (cli === 'agy' && t.agy_conversation) || (cli === 'codex' && t.codex_thread))
   ) {
@@ -367,7 +390,7 @@ function buildPromptBody(cli: CliId, t: ProjectTask, p: Project, ask: string, cw
   }
 
   // If handing over from another CLI, include handoff context
-  if (lastRunner && lastRunner !== cli) {
+  if (lastRunner && (lastRunner !== cli || switched)) {
     let diff = ''
     let status = ''
     try {
@@ -386,7 +409,7 @@ function buildPromptBody(cli: CliId, t: ProjectTask, p: Project, ask: string, cw
       .slice(-3000)
 
     return [
-      `HANDOFF NOTICE: ${cliDisplayName(lastRunner)} worked on this before you. You are taking over seamlessly in ${cwd}.`,
+      `HANDOFF NOTICE: ${switched ? 'An earlier session' : cliDisplayName(lastRunner)} worked on this before you. You are taking over seamlessly in ${cwd}.`,
       modeNote,
       kbBlock,
       `Original Task / Thread:\n${t.title}\n${t.notes}`.trim(),
@@ -556,6 +579,7 @@ const sumTokens = (u: Usage): number => (u.input_tokens ?? 0) + (u.output_tokens
 /** Launch Claude Code with real-time stream-json events, tool tracking, and live rate_limit_event capture. */
 function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy: string): void {
   const cwd = resolveWorkingDir(startTask, p)
+  const acct = chooseAccount('claude', startTask.id)
   const t = localizeAttachments(getTask(startTask.id), cwd)
   const exe = findCliExecutable('claude')
   if (!exe) throw new Error('Claude Code CLI is not installed or not found. Configure its path in Settings.')
@@ -564,6 +588,7 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
   const effort = resolveEffortFor(t, p)
   const { cliModelArg: model, effortArg } = resolveCliModelWithEffort('claude', baseModel, effort)
   const prompt = buildFullPrompt('claude', t, p, ask, cwd)
+  accountSwitched.delete(t.id)
   // Default = ask in Omni CLI for every edit/command; Accept Edits = only commands and other risky tools ask
   const permMode =
     t.permission_mode === 'bypass'
@@ -584,7 +609,7 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
   if (effortArg) args.push('--effort', effortArg)
   if (t.session_id) args.push('--resume', t.session_id)
 
-  const env = { ...process.env }
+  const env = { ...process.env, ...accountEnv('claude', acct) }
   delete env.CLAUDECODE
 
   const isCmd = /\.(cmd|bat)$/i.test(exe)
@@ -594,7 +619,8 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
 
   running.set(t.id, child)
   run(
-    "UPDATE project_tasks SET run_state = 'running', runner = 'claude', model = ?, effort = ?, error = '', check_state = '', check_output = '', runs = runs + 1 WHERE id = ?",
+    "UPDATE project_tasks SET run_state = 'running', runner = 'claude', account_id = ?, model = ?, effort = ?, error = '', check_state = '', check_output = '', runs = runs + 1 WHERE id = ?",
+    acct,
     baseModel,
     effortArg,
     t.id
@@ -663,8 +689,8 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
             ? rli.resetsAt
             : null
       // Weekly / per-model windows are shown from the live usage API; only the 5h window drives the main lock
-      const key = !rli.rateLimitType || rli.rateLimitType === 'five_hour' ? 'claude' : `claude:${rli.rateLimitType}`
-      recordCliRateEvent(key as CliId, statusMap, utilPct, resetsIso, rli.rateLimitType || rli.status || '')
+      const key = rateKey('claude', acct, !rli.rateLimitType || rli.rateLimitType === 'five_hour' ? '' : rli.rateLimitType)
+      recordCliRateEvent(key, statusMap, utilPct, resetsIso, rli.rateLimitType || rli.status || '')
     }
 
     if (ev.session_id && ev.type === 'system') {
@@ -748,7 +774,7 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
       else finishRun(getTask(t.id), freshProj, 'claude', model)
     } else {
       if (turnedDownByLimit(rateRejected, `${r?.isError ? r.text : ''}\n${err}`)) {
-        recordCliRateEvent('claude', 'rejected', 100, null, '5-hour subscription limit reached')
+        recordCliRateEvent(rateKey('claude', acct), 'rejected', 100, null, '5-hour subscription limit reached')
       }
       const why = timedOut
         ? `Stopped after ${RUN_LIMIT_MS / 60_000} minutes.`
@@ -813,6 +839,7 @@ function localizeAttachments(t: ProjectTask, cwd: string): ProjectTask {
 /** Launch Antigravity CLI (`agy`) or the other supported CLIs (`codex`, `copilot`). */
 function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: string, firstWhy: string): void {
   const cwd = resolveWorkingDir(startTask, p)
+  const acct = chooseAccount(cli, startTask.id)
   const t = localizeAttachments(getTask(startTask.id), cwd)
   const exe = findCliExecutable(cli)
   if (!exe) {
@@ -830,6 +857,7 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   const effort = resolveEffortFor(t, p)
   const { cliModelArg: model, effortArg } = resolveCliModelWithEffort(cli, baseModel, effort)
   const prompt = buildFullPrompt(cli, t, p, ask, cwd)
+  accountSwitched.delete(t.id)
 
   // Prompts go through stdin wherever the CLI supports it: no 32k command-line limit and no shell-quoting bugs.
   let args: string[] = []
@@ -857,11 +885,12 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
     if (t.permission_mode !== 'plan') args.push('--allow-all-tools')
   }
 
+  const childEnv = { ...process.env, ...accountEnv(cli, acct) }
   const isCmd = /\.(cmd|bat)$/i.test(exe)
   const stdio: ['pipe' | 'ignore', 'pipe', 'pipe'] = [stdinPrompt !== null ? 'pipe' : 'ignore', 'pipe', 'pipe']
   const child = isCmd
-    ? spawn(`"${exe}" ${args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`, { shell: true, cwd, windowsHide: true, stdio })
-    : spawn(exe, args, { cwd, windowsHide: true, stdio })
+    ? spawn(`"${exe}" ${args.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(' ')}`, { shell: true, cwd, env: childEnv, windowsHide: true, stdio })
+    : spawn(exe, args, { cwd, env: childEnv, windowsHide: true, stdio })
   if (stdinPrompt !== null) {
     child.stdin?.on('error', () => undefined)
     child.stdin?.end(stdinPrompt)
@@ -869,8 +898,9 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
 
   running.set(t.id, child)
   run(
-    "UPDATE project_tasks SET run_state = 'running', runner = ?, model = ?, effort = ?, error = '', check_state = '', check_output = '', runs = runs + 1 WHERE id = ?",
+    "UPDATE project_tasks SET run_state = 'running', runner = ?, account_id = ?, model = ?, effort = ?, error = '', check_state = '', check_output = '', runs = runs + 1 WHERE id = ?",
     cli,
+    acct,
     baseModel,
     effortArg,
     t.id
@@ -1079,7 +1109,7 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
           const fam = agyModelFamily(baseModel)
           recordCliRateEvent(`agy:${fam.key}` as CliId, 'rejected', 100, null, `${fam.label} quota reached`)
         } else {
-          recordCliRateEvent(cli, 'rejected', 100, null, 'Subscription quota limit reached')
+          recordCliRateEvent(rateKey(cli, acct), 'rejected', 100, null, 'Subscription quota limit reached')
         }
       }
       const why = timedOut
@@ -1129,6 +1159,16 @@ function executeWithCli(cli: CliId, t: ProjectTask, p: Project, ask: string, fir
 const agyTried = new Map<number, Set<string>>()
 
 function handleStoppedRun(from: CliId, t: ProjectTask, p: Project, ask: string, why: string, firstWhy: string): void {
+  // Another saved account of the same provider is cheaper than switching provider — try those first.
+  // Each retry only happens after the account just used was marked rate limited, so this always terminates.
+  if (MULTI_ACCOUNT_CLIS.includes(from) && hasExtraAccounts(from) && isAccountLimited(from, t.account_id ?? 0)) {
+    const next = pickAccountId(from, isCliReady(from))
+    if (next !== null && next !== (t.account_id ?? 0)) {
+      appendLog(t.id, 'handoff', `${cliDisplayName(from)} ${accountLabel(from, t.account_id ?? 0)} hit its limit. Retrying on ${accountLabel(from, next)}…`, from)
+      executeWithCli(from, getTask(t.id), p, ask, firstWhy)
+      return
+    }
+  }
   // Antigravity meters model groups separately — a different group may still have quota, so try that first
   if (from === 'agy' && getSettings().agyFamilyFallback && turnedDownByLimit(false, why)) {
     const tried = agyTried.get(t.id) ?? new Set<string>()

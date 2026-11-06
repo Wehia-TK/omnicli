@@ -1,3 +1,4 @@
+import { accounts } from './accounts'
 import { approvals } from './approvals'
 import { clis } from './clis'
 import { gitops } from './gitops'
@@ -16,6 +17,7 @@ import { attachments, github, history, review, rules } from './workspace'
 export const coreApi = {
   projects,
   clis,
+  accounts,
   knowledge,
   terminal,
   voice,

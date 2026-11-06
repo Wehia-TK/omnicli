@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, shell }
 import { existsSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { coreApi } from '../core/api'
+import { initAccounts } from '../core/accounts'
 import { onDbChange, openDatabase } from '../core/db'
 import { initApprovals } from '../core/approvals'
 import { refreshGraphWatchers, stopGraphWatchers } from '../core/graphwatch'
@@ -196,6 +197,7 @@ app.whenReady().then(async () => {
 
   const dataDir = join(app.getPath('userData'), 'data')
   openDatabase(dataDir)
+  initAccounts(dataDir)
   onDbChange(broadcastChanged)
 
   initProjects(dataDir, {
