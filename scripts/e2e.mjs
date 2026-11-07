@@ -98,6 +98,13 @@ const env = {
   GIT_COMMITTER_NAME: 'Omni E2E',
   GIT_COMMITTER_EMAIL: 'e2e@example.com'
 }
+// A stand-in `claude` on PATH, so the Claude limits path runs on machines (CI) without Claude Code installed
+const fakeBin = join(ROOT, 'bin')
+mkdirSync(fakeBin, { recursive: true })
+if (isWin) writeFileSync(join(fakeBin, 'claude.cmd'), '@echo 0.0.0-e2e\r\n')
+else writeFileSync(join(fakeBin, 'claude'), '#!/bin/sh\necho 0.0.0-e2e\n', { mode: 0o755 })
+const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH'
+env[pathKey] = `${fakeBin}${isWin ? ';' : ':'}${env[pathKey] ?? ''}`
 delete env.ELECTRON_RUN_AS_NODE
 delete env.ELECTRON_RENDERER_URL
 const appFlags = [`--user-data-dir=${PROFILE}`, '--enable-logging']
