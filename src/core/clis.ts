@@ -602,6 +602,17 @@ const resetLabel = (iso: string | null | undefined, nowMs: number, fallback = '5
   return Number.isNaN(ms) || ms <= 0 ? fallback : `Resets in ${formatDurationShort(ms)}`
 }
 
+/** Claude's own panel style: "Resets at 7:40 PM" today, "Resets Tue 11:00 PM" later in the week. */
+export function clockResetLabel(iso: string | null | undefined, nowMs: number, fallback: string): string {
+  const at = iso ? Date.parse(iso) : NaN
+  if (Number.isNaN(at) || at <= nowMs) return fallback
+  const d = new Date(at)
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  if (d.toDateString() === new Date(nowMs).toDateString()) return `Resets at ${time}`
+  if (at - nowMs < 6 * 86400_000) return `Resets ${d.toLocaleDateString([], { weekday: 'short' })} ${time}`
+  return `Resets ${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+}
+
 const statusFor = (pct: number): 'ok' | 'warning' | 'rejected' => (pct >= 100 ? 'rejected' : pct >= 80 ? 'warning' : 'ok')
 
 // ───────────────────────────── Claude: live OAuth usage ─────────────────────────────
@@ -1379,9 +1390,10 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
       out.utilizationPct = pct
       out.status = statusFor(pct)
       out.resetsAt = live.fiveHour.resetsAt
-      out.resetInLabel = resetLabel(live.fiveHour.resetsAt, nowMs)
+      // Same wording as Claude's "Plan usage limits" panel, so the two can be compared at a glance
+      out.resetInLabel = clockResetLabel(live.fiveHour.resetsAt, nowMs, '5h window ready')
       out.weeklyUtilizationPct = live.sevenDay.pct
-      out.weeklyResetInLabel = live.sevenDay.resetsAt ? `7d resets in ${formatDurationShort(Date.parse(live.sevenDay.resetsAt) - nowMs)}` : undefined
+      out.weeklyResetInLabel = live.sevenDay.resetsAt ? clockResetLabel(live.sevenDay.resetsAt, nowMs, 'Weekly window ready') : undefined
       out.liveNote = claudeUsageNote(snap, nowMs)
       const modelTokens = (re: RegExp): { tokens: number; turns: number } => {
         let tokens = 0
