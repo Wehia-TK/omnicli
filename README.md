@@ -55,6 +55,7 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 - Bi-directional sync between local storage (`node:sqlite`) and `.ai-kb/PROJECT_KNOWLEDGE.md`.
 - Maintains architectural notes, repository graphs, conventions, decisions, and cross-AI handoff logs.
 - When an AI hits its quota or you switch tools, the next agent picks up right where the previous one left off without losing context.
+- **Optional code graph**: if [graphify](https://pypi.org/project/graphifyy/) is installed (`pip install graphifyy`), *Scan repo* also builds a zero-token code graph (`graphify-out/`) and uses its modules; without it the scan falls back to the folder structure, with no error.
 
 ### 4. 🌿 Git Worktrees & Clean Branching
 - Choose between **Local** working directory execution or **Git Worktrees**.

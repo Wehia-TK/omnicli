@@ -273,7 +273,8 @@ export const knowledge = {
     let graphNote = ''
     if (getSettings().useGraphify) {
       const g = await runGraphify(p.folder)
-      graphNote = g.ok ? '' : g.message
+      // graphify is optional: if it isn't installed the scan just uses the folder-based fallback below
+      graphNote = g.ok || g.missing ? '' : g.message
       const report = join(p.folder, 'graphify-out', 'GRAPH_REPORT.md')
       if (g.ok && existsSync(report)) {
         upsertScannerEntry(projectId, 'architecture', 'Code Graph (graphify)', summarizeGraphReport(readFileSync(report, 'utf8')), 'graphify-out/GRAPH_REPORT.md')
@@ -506,7 +507,7 @@ function scanFolder(folder: string): {
 }
 
 /** Run `graphify update <folder>` (AST-only extraction — no LLM, no tokens). */
-function runGraphify(folder: string): Promise<{ ok: boolean; message: string }> {
+function runGraphify(folder: string): Promise<{ ok: boolean; missing?: boolean; message: string }> {
   return new Promise((resolve) => {
     const python = process.platform === 'win32' ? 'python' : 'python3'
     const child = spawn(python, ['-m', 'graphify', 'update', folder], { cwd: folder, windowsHide: true })
@@ -516,13 +517,16 @@ function runGraphify(folder: string): Promise<{ ok: boolean; message: string }> 
     const timer = setTimeout(() => child.kill(), 4 * 60_000)
     child.on('error', () => {
       clearTimeout(timer)
-      resolve({ ok: false, message: 'Python is not on PATH (install graphify with `pip install graphifyy`)' })
+      resolve({ ok: false, missing: true, message: 'Python is not on PATH (install graphify with `pip install graphifyy`)' })
     })
     child.on('close', (code) => {
       clearTimeout(timer)
       if (code === 0) return resolve({ ok: true, message: '' })
-      const msg = /No module named graphify/i.test(out) ? 'graphify is not installed (`pip install graphifyy`)' : out.trim().split('\n').slice(-2).join(' ')
-      resolve({ ok: false, message: msg || `graphify exited with ${code}` })
+      // "python" may also be the Windows Store stub, which prints an install hint instead of running
+      if (/No module named graphify|Python was not found|Microsoft Store/i.test(out)) {
+        return resolve({ ok: false, missing: true, message: 'graphify is not installed (`pip install graphifyy`)' })
+      }
+      resolve({ ok: false, message: out.trim().split('\n').slice(-2).join(' ') || `graphify exited with ${code}` })
     })
   })
 }
