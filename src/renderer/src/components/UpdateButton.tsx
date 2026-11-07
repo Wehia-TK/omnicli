@@ -180,6 +180,11 @@ function UpdateModal({
               {restartCount === 1 ? 'One change needs' : `${restartCount} changes need`} a restart to take effect. Updating will
               {info.remoteCommits.length ? ' pull the new commits,' : ''} install dependencies if they changed, verify the code
               compiles, then restart Omni CLI. Running sessions are stopped by the restart.
+              {info.remoteCommits.length > 0 && (
+                <span className="mt-1.5 block text-[11.5px] text-amber-200/80">
+                  Pulled code and its npm install scripts run on this computer, so only pull from a repository you trust.
+                </span>
+              )}
             </p>
           )}
 

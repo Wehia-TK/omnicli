@@ -204,7 +204,10 @@ const CATALOG_MODELS: Record<CliId, CliModel[]> = {
   ]
 }
 
-function whereBin(name: string): string {
+/** VS Code puts a `copilot` launcher on PATH that only prints "Copilot CLI was not found" — it is not the CLI. */
+const VSCODE_COPILOT_SHIM = /[\\/]copilot-shim[\\/]/i
+
+function whereBin(name: string, skip?: RegExp): string {
   if (process.platform === 'win32') {
     try {
       const r = spawnSync('where.exe', [name], { windowsHide: true, timeout: 4000, encoding: 'utf8' })
@@ -212,7 +215,7 @@ function whereBin(name: string): string {
       const hits = r.stdout
         .split(/\r?\n/)
         .map((l) => l.trim())
-        .filter(Boolean)
+        .filter((l) => l && !(skip && skip.test(l)))
       return hits.find((h) => /\.exe$/i.test(h)) ?? hits.find((h) => /\.(cmd|bat)$/i.test(h)) ?? hits[0] ?? ''
     } catch {
       return ''
@@ -221,10 +224,13 @@ function whereBin(name: string): string {
 
   // macOS / Linux resolution
   try {
-    const r = spawnSync('which', [name], { timeout: 4000, encoding: 'utf8' })
+    const r = spawnSync('which', ['-a', name], { timeout: 4000, encoding: 'utf8' })
     if (r.status === 0 && r.stdout) {
-      const hit = r.stdout.split('\n')[0].trim()
-      if (hit && existsSync(hit)) return hit
+      const hit = r.stdout
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l && !(skip && skip.test(l)) && existsSync(l))
+      if (hit) return hit
     }
   } catch {
     // fallback to common paths
@@ -346,14 +352,13 @@ function locateCliExecutable(cli: CliId, s: ReturnType<typeof getSettings>): str
 
   if (cli === 'copilot') {
     if (s.copilotPath.trim() && existsSync(s.copilotPath.trim())) return s.copilotPath.trim()
-    const onPath = whereBin('copilot')
+    const onPath = whereBin('copilot', VSCODE_COPILOT_SHIM)
     if (onPath) return onPath
     const candidates = [
-      join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'copilot-shim', 'copilot.exe'),
+      join(appData, 'npm', 'copilot.cmd'),
       '/opt/homebrew/bin/copilot',
       '/usr/local/bin/copilot',
-      join(home, '.local', 'bin', 'copilot'),
-      '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
+      join(home, '.local', 'bin', 'copilot')
     ]
     return candidates.find((c) => existsSync(c)) ?? ''
   }

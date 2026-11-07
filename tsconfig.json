@@ -12,11 +12,12 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": ["node"],
     "paths": {
       "@shared/*": ["./src/shared/*"],
       "@/*": ["./src/renderer/src/*"]
     }
   },
-  "include": ["src/**/*", "electron.vite.config.ts"]
+  "include": ["src/**/*", "test/**/*", "electron.vite.config.ts"]
 }

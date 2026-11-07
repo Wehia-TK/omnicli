@@ -1,8 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, session, shell } from 'electron'
-import { existsSync, statSync, unlinkSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, unlinkSync } from 'node:fs'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { coreApi } from '../core/api'
+import { canOpenPath, isAllowedWebviewSrc, isAppUrl, isValidApiPath, resolveApiMethod, safeExternalUrl, samePath } from './security'
 import { initAccounts } from '../core/accounts'
 import { onDbChange, openDatabase } from '../core/db'
 import { initApprovals } from '../core/approvals'
@@ -82,29 +83,12 @@ let mainWindow: BrowserWindow | null = null
 
 const RENDERER_HTML = join(__dirname, '../renderer/index.html')
 const PICKER_PRELOAD = join(__dirname, '../preload/picker.js')
-const samePath = (a: string, b: string): boolean =>
-  process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b)
-
-/** True only for Omni CLI's own UI (the built index.html, or the electron-vite dev server). */
-function isAppUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw)
-    const dev = process.env.ELECTRON_RENDERER_URL
-    if (dev && u.origin === new URL(dev).origin) return true
-    return u.protocol === 'file:' && decodeURIComponent(u.pathname).toLowerCase() === decodeURIComponent(pathToFileURL(RENDERER_HTML).pathname).toLowerCase()
-  } catch {
-    return false
-  }
-}
+const appUrl = (raw: string): boolean => isAppUrl(raw, RENDERER_HTML, process.env.ELECTRON_RENDERER_URL)
 
 /** Links leave the app through the system browser, and only web / mail links (never file:// or custom schemes). */
 function openExternalSafe(raw: string): void {
-  try {
-    const u = new URL(raw)
-    if (['https:', 'http:', 'mailto:'].includes(u.protocol)) void shell.openExternal(u.href)
-  } catch {
-    // not a URL
-  }
+  const url = safeExternalUrl(raw)
+  if (url) void shell.openExternal(url)
 }
 
 /**
@@ -118,12 +102,12 @@ app.on('web-contents-created', (_e, contents) => {
   })
   if (contents.getType() === 'webview') return // the browser preview may navigate wherever the user points it
   contents.on('will-navigate', (ev, url) => {
-    if (isAppUrl(url)) return
+    if (appUrl(url)) return
     ev.preventDefault()
     openExternalSafe(url)
   })
   contents.on('will-redirect', (ev, url) => {
-    if (!isAppUrl(url)) ev.preventDefault()
+    if (!appUrl(url)) ev.preventDefault()
   })
   contents.on('will-attach-webview', (ev, prefs, params) => {
     if (prefs.preload && !samePath(prefs.preload, PICKER_PRELOAD)) delete prefs.preload
@@ -132,19 +116,9 @@ app.on('web-contents-created', (_e, contents) => {
     prefs.contextIsolation = true
     prefs.sandbox = true
     prefs.webSecurity = true
-    if (params.src && !/^(https?:|about:blank)/i.test(params.src)) ev.preventDefault()
+    if (!isAllowedWebviewSrc(params.src)) ev.preventDefault()
   })
 })
-
-/** Folders, images and plain-text files only: never hand an executable or shortcut to the OS shell. */
-const OPENABLE_FILE = /\.(png|jpe?g|gif|webp|bmp|md|txt|log|json)$/i
-function canOpenPath(target: string): boolean {
-  try {
-    return statSync(target).isDirectory() || OPENABLE_FILE.test(target)
-  } catch {
-    return false
-  }
-}
 
 let broadcastTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -336,10 +310,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('api', async (event, path: unknown, rawArgs: unknown) => {
     // Only Omni CLI's own top-level page may use the bridge (not the preview webview, iframes or a navigated-away page)
     const frame = event.senderFrame
-    if (event.sender.getType() !== 'window' || !frame || frame !== event.sender.mainFrame || !isAppUrl(frame.url)) {
+    if (event.sender.getType() !== 'window' || !frame || frame !== event.sender.mainFrame || !appUrl(frame.url)) {
       throw new Error('Blocked: API call from an untrusted frame')
     }
-    if (typeof path !== 'string' || !/^[A-Za-z]+(\.[A-Za-z]+)+$/.test(path)) throw new Error('Invalid API method')
+    if (!isValidApiPath(path)) throw new Error('Invalid API method')
     const args = Array.isArray(rawArgs) ? rawArgs : []
     if (path === 'window.minimize') {
       const win = BrowserWindow.getFocusedWindow() ?? mainWindow
@@ -393,16 +367,9 @@ app.whenReady().then(async () => {
       return true
     }
 
-    // Walk own properties only, never into prototypes (constructor, __proto__, …)
-    let cur: unknown = coreApi
-    for (const p of path.split('.')) {
-      if (!cur || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, p)) throw new Error(`Unknown API method: ${path}`)
-      cur = (cur as Record<string, unknown>)[p]
-    }
-    if (typeof cur !== 'function') {
-      throw new Error(`Unknown API method: ${path}`)
-    }
-    return await (cur as (...a: unknown[]) => unknown)(...args)
+    const fn = resolveApiMethod(coreApi, path)
+    if (!fn) throw new Error(`Unknown API method: ${path}`)
+    return await fn(...args)
   })
 
   createWindow()

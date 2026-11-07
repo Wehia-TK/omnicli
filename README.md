@@ -9,6 +9,7 @@
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC.svg?logo=tailwind-css)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/YehiaTarekKhedr/omnicli/actions/workflows/ci.yml/badge.svg)](https://github.com/YehiaTarekKhedr/omnicli/actions/workflows/ci.yml)
 
 </div>
 
@@ -35,7 +36,7 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 - Permission mode toggling (`default`, `accept-edits`, `bypass`, `plan`).
 - Visual indicators showing CLI authentication status (unauthenticated subscriptions remain disabled/greyed out).
 - **Voice input** (mic button in the composer): click, speak, click again to insert. Transcription runs locally with **NVIDIA Parakeet TDT 0.6B** (int8, via sherpa-onnx) — about 1 s per phrase on CPU, the model stays loaded between dictations. It reuses the model and Python venv from an existing Voice Studio install (looked up in `~/Voice Studio/VoiceStudio`, `C:\` / `D:\Voice Studio\VoiceStudio`, or the folder in the `OMNI_VOICE_STUDIO` environment variable); nothing is downloaded. Without it, Windows falls back to the built-in (much less accurate) System.Speech recognizer. Code: `src/core/voice.ts`, `src/renderer/src/lib/recorder.ts`.
-- **Team updates (Pull & restart)**: the title-bar update button fetches GitHub in the background and flags commits merged into the branch's upstream (or the remote's default branch, `main`/`master`) that you haven't pulled, listing their commit messages. One click pulls them (fast-forward, or replays your local commits on top when you've diverged — aborting cleanly on conflicts), reinstalls dependencies if needed, typechecks, builds and restarts. **Push** now rebases onto teammates' pushes first and writes every unpushed AI-agent commit message into the auto-commit body, so conventional commits stay visible in history.
+- **Team updates (Pull & restart)**: the title-bar update button fetches GitHub in the background and flags commits merged into the branch's upstream (or the remote's default branch, `main`/`master`) that you haven't pulled, listing their commit messages. Pulled code and its `npm install` scripts run on your machine, so keep `origin` pointed at a repository you trust. One click pulls them (fast-forward, or replays your local commits on top when you've diverged — aborting cleanly on conflicts), reinstalls dependencies if needed, typechecks, builds and restarts. **Push** now rebases onto teammates' pushes first and writes every unpushed AI-agent commit message into the auto-commit body, so conventional commits stay visible in history.
 - **Single instance**: only one Omni CLI runs at a time — launching it again just focuses the open window. After an in-app update the app restarts itself (the new process waits for the old one to exit, then takes over).
 
 ### 2. 📊 Live Usage Limits & Quota Metering
@@ -91,6 +92,7 @@ Omni CLI (Electron App)
 │   ├── gitops.ts       - Asynchronous Git status, diffs, branches, and worktrees
 │   ├── terminal.ts     - Node-pty session lifecycle management
 │   ├── proc.ts         - Shell-free launching of AI CLIs (npm .cmd shims on Windows)
+│   └── (main) security.ts - Pure navigation / IPC / open-path rules, unit-tested
 │   ├── scheduler.ts    - Background cron & scheduled prompt runner
 │   └── db.ts           - Fast embedded persistence via node:sqlite
 └── Renderer (src/renderer/)
@@ -112,14 +114,14 @@ Omni CLI (Electron App)
 ### Prerequisites
 
 - **Operating System**: Windows 10/11 or macOS 12+ (Apple Silicon M-Series & Intel)
-- **Node.js**: `v22.12` or later (needed by the Vite 8 / TypeScript 7 toolchain; the app itself runs on Electron's bundled Node)
+- **Node.js**: `v22.18` or later (the Vite 8 / TypeScript 7 toolchain and the TypeScript unit tests need it; the app itself runs on Electron's bundled Node)
 - **npm** or compatible package manager
 - **Git**: Installed and available in your system `PATH`
 - **Supported AI CLIs** (install whichever you use):
   - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) (`claude`)
   - [Google Antigravity](https://antigravity.google) (`agy`)
   - [OpenAI Codex](https://github.com/openai/codex) (`codex`)
-  - [GitHub Copilot CLI](https://github.com/github/copilot-cli) (`copilot`)
+  - [GitHub Copilot CLI](https://github.com/github/copilot-cli) (`copilot`, installed with `npm install -g @github/copilot`; VS Code's built-in `copilot` launcher is not the CLI and is ignored)
 
 ### Installation
 
@@ -151,11 +153,14 @@ Omni CLI (Electron App)
 | `npm run dev` | Starts the app in development mode with hot reload (`electron-vite dev`). |
 | `npm run build` | Compiles the main process, preload scripts, and renderer bundle. |
 | `npm run typecheck` | Validates TypeScript types across the entire project (`tsc --noEmit`). |
+| `npm test` | Unit tests (Node's built-in test runner): IPC/navigation security rules and shell-free CLI launching. |
+| `npm run test:e2e` | After `npm run build`: launches the app in a throw-away profile, drives it over the DevTools protocol and checks the security boundaries plus the main API (no AI runs, costs nothing; never touches a running Omni CLI). Add `-- --exe "release/win-unpacked/Omni CLI.exe"` to test a packaged build. |
+| `npm run check` | Typecheck + unit tests + build in one go. |
 | `npm run dist` | Builds production assets and packages a Windows installer (`.exe`) via `electron-builder`. |
 | `npm run dist:mac` | Builds production assets and packages macOS bundles (`.dmg` & `.zip`) via `electron-builder`. |
 
 > [!IMPORTANT]
-> **Verification Convention**: Always run `npm run typecheck && npm run build` before committing changes to ensure type safety and build integrity.
+> **Verification Convention**: Always run `npm run check` (typecheck, unit tests, build) before committing; run `npm run test:e2e` too when touching `src/main`, `src/preload` or process launching. GitHub Actions runs all of this on every push and pull request (`.github/workflows/ci.yml`).
 
 ---
 
@@ -176,6 +181,9 @@ Omni CLI (Electron App)
 │   │   │   ├── lib/            # Markdown renderer, API bindings, date utils
 │   │   │   └── App.tsx         # Main UI layout & state orchestrator
 │   └── shared/                 # Shared TypeScript interfaces, types, and constants
+├── scripts/e2e.mjs             # End-to-end security & API smoke test (npm run test:e2e)
+├── test/                       # Unit tests (npm test)
+├── .github/workflows/ci.yml    # CI: typecheck, tests, build, audit (Windows + macOS), e2e (Windows)
 ├── electron.vite.config.ts     # Multi-target Vite build configuration
 ├── package.json                # Project dependencies and packaging scripts
 └── tsconfig.json               # Root TypeScript configuration
@@ -192,10 +200,18 @@ Omni CLI (Electron App)
 - **No shell injection**: AI CLIs are started without a shell. On Windows, npm `.cmd` shims are resolved to the underlying script, so quotes, `&`, `%VAR%` or newlines in a prompt are passed through literally and never executed.
 - **Approvals bridge**: Claude Code permission prompts reach the app through a loopback-only (`127.0.0.1`) server that requires a random per-launch token.
 - **Limited shell access from the UI**: "Open" only opens folders, images and text files, never executables or shortcuts.
+- **Tested**: these rules have unit tests (`npm test`) and an end-to-end check against the real app (`npm run test:e2e`), both run in CI.
+- **Reporting**: see [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 - **Phone notifications are opt-in**: the ntfy topic is empty by default. Use *Settings → Generate* to create a random, unguessable topic. ntfy topics are unauthenticated, so anyone who knows the name can read the messages; use a self-hosted/ACL-protected server for sensitive content.
 - **Local-First Architecture**: Your projects, credentials, and knowledge base stay on your machine.
 - **Embedded Database**: Local persistent storage runs directly inside Node's embedded `node:sqlite`.
 - **Credential Safety**: Authentication relies on the respective CLI tools' existing local login sessions (OAuth tokens and configurations are never stored insecurely or transmitted to third-party servers).
+
+---
+
+## 🤝 Contributing
+
+Issues and pull requests are welcome. Please run `npm run check` (and `npm run test:e2e` for changes to the main process, preload or process launching) before opening a PR, and keep the README in sync with what you change. Report security problems privately as described in [SECURITY.md](SECURITY.md).
 
 ---
 
