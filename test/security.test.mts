@@ -85,7 +85,8 @@ describe('API method resolution', () => {
 
 describe('samePath', () => {
   it('is case-insensitive on Windows only', () => {
-    assert.equal(samePath('C:\\A\\b.js', 'c:\\a\\B.js', 'win32'), process.platform === 'win32')
+    assert.equal(samePath('C:\\A\\b.js', 'c:\\a\\B.js', 'win32'), true)
     assert.equal(samePath('/a/b.js', '/a/../a/b.js', 'linux'), true)
+    assert.equal(samePath('/a/B.js', '/a/b.js', 'linux'), false)
   })
 })
