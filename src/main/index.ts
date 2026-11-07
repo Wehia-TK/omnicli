@@ -32,8 +32,17 @@ if (process.platform === 'win32') {
   }
 }
 
-/** Ensure Windows taskbar jump-list, Start Menu & folder shortcuts launch Electron directly (no cmd.exe). */
+/** Shortcuts are a convenience: never let them stop the app from starting (getPath can throw on unusual profiles). */
 function ensureWindowsShortcut(appRoot: string): void {
+  try {
+    writeWindowsShortcuts(appRoot)
+  } catch (e) {
+    console.warn('[shortcuts]', (e as Error).message)
+  }
+}
+
+/** Ensure Windows taskbar jump-list, Start Menu & folder shortcuts launch Electron directly (no cmd.exe). */
+function writeWindowsShortcuts(appRoot: string): void {
   if (process.platform !== 'win32') return
   const programsDir = join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')
   const staleElectronLnk = join(programsDir, 'Electron.lnk')

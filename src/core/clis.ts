@@ -611,73 +611,183 @@ interface LiveWindow {
   resetsAt: string | null
 }
 
-interface LiveClaudeOAuthUsage {
+type RawWindow = { utilization?: number | null; resets_at?: string | null } | null | undefined
+
+/** One reading of Anthropic's usage endpoint (the same numbers as Claude's "Plan usage limits" panel). */
+interface ClaudeUsageSnapshot {
   fetchedAt: number
-  fiveHour: LiveWindow
-  sevenDay: LiveWindow
-  perModel: { key: string; label: string; match: RegExp; window: LiveWindow }[]
+  source: 'api' | 'claude-cache'
+  raw: Record<string, RawWindow>
 }
 
-let cachedClaudeOAuthUsage: LiveClaudeOAuthUsage | null = null
-let claudeUsageInFlight: Promise<LiveClaudeOAuthUsage | null> | null = null
+/** A window as of `nowMs`: once its reset time has passed it is empty again. */
+function liveWindow(w: RawWindow, nowMs: number): LiveWindow {
+  const resetsAt = w?.resets_at ?? null
+  if (resetsAt && Date.parse(resetsAt) <= nowMs) return { pct: 0, resetsAt: null }
+  return { pct: Math.round(w?.utilization ?? 0), resetsAt }
+}
 
-/** Real live 5-hour session, 7-day weekly and per-model weekly usage from Anthropic's OAuth usage endpoint (falls back to ~/.claude.json). */
-async function fetchLiveClaudeOAuthUsage(force = false): Promise<LiveClaudeOAuthUsage | null> {
-  const now = Date.now()
-  if (!force && cachedClaudeOAuthUsage && now - cachedClaudeOAuthUsage.fetchedAt < 45_000) return cachedClaudeOAuthUsage
-  if (claudeUsageInFlight) return claudeUsageInFlight
-  claudeUsageInFlight = (async () => {
-    type W = { utilization?: number | null; resets_at?: string | null } | null | undefined
-    const win = (w: W): LiveWindow => {
-      const resetsAt = w?.resets_at ?? null
-      const expired = resetsAt ? Date.parse(resetsAt) <= now : false
-      return { pct: expired ? 0 : Math.round(w?.utilization ?? 0), resetsAt: expired ? null : resetsAt }
-    }
-    const build = (d: Record<string, W>): LiveClaudeOAuthUsage => ({
-      fetchedAt: now,
-      fiveHour: win(d.five_hour),
-      sevenDay: win(d.seven_day),
-      perModel: [
-        { key: 'seven_day_opus', label: 'Opus · weekly', match: /opus/i },
-        { key: 'seven_day_sonnet', label: 'Sonnet · weekly', match: /sonnet/i }
-      ]
-        .filter((m) => d[m.key] && d[m.key]?.utilization != null)
-        .map((m) => ({ ...m, window: win(d[m.key]) }))
-    })
+const CLAUDE_PER_MODEL = [
+  { key: 'seven_day_opus', label: 'Opus · weekly', match: /opus/i },
+  { key: 'seven_day_sonnet', label: 'Sonnet · weekly', match: /sonnet/i }
+]
 
-    const home = homedir()
-    const credsPath = join(home, '.claude', '.credentials.json')
-    if (existsSync(credsPath)) {
-      try {
-        const creds = JSON.parse(readFileSync(credsPath, 'utf8')) as { claudeAiOauth?: { accessToken?: string; expiresAt?: number } }
-        const token = creds.claudeAiOauth?.accessToken
-        const notExpired = !creds.claudeAiOauth?.expiresAt || creds.claudeAiOauth.expiresAt > now
-        if (token && notExpired) {
-          const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-            headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', Accept: 'application/json' },
-            signal: AbortSignal.timeout(4500)
-          })
-          if (res.ok) return (cachedClaudeOAuthUsage = build((await res.json()) as Record<string, W>))
-        }
-      } catch {
-        // offline — fall through to the CLI's own cache
-      }
-    }
-    const claudeJson = join(home, '.claude.json')
-    if (existsSync(claudeJson)) {
-      try {
-        const cj = JSON.parse(readFileSync(claudeJson, 'utf8')) as { cachedUsageUtilization?: { utilization?: Record<string, W> } }
-        const u = cj.cachedUsageUtilization?.utilization
-        if (u) return (cachedClaudeOAuthUsage = build(u))
-      } catch {
-        // ignore
-      }
-    }
+/**
+ * The usage endpoint is rate limited per account (and Claude Code polls it too), so it is called sparingly:
+ * every 3 minutes at most, sooner after a run finishes or on a manual refresh, and with exponential backoff
+ * after an error. The last good reading is kept (also across restarts) and shown with its age.
+ */
+const USAGE_MIN_INTERVAL = 3 * 60_000
+const USAGE_AFTER_RUN_INTERVAL = 60_000
+const USAGE_FORCE_INTERVAL = 30_000
+const USAGE_MIN_BACKOFF = 2 * 60_000
+const USAGE_MAX_BACKOFF = 30 * 60_000
+const USAGE_STORE_KEY = 'cache.claudeUsage' // lives in the settings table; getSettings() ignores unknown keys
+
+let claudeUsage: ClaudeUsageSnapshot | null | undefined // undefined = not loaded from disk yet
+let claudeUsageDirty = false
+let claudeUsageLastAttempt = 0
+let claudeUsageBlockedUntil = 0
+let claudeUsageBackoff = 0
+let claudeUsageError = ''
+let claudeUsageInFlight: Promise<void> | null = null
+
+function loadStoredClaudeUsage(): ClaudeUsageSnapshot | null {
+  try {
+    const row = get<{ value: string }>('SELECT value FROM settings WHERE key = ?', USAGE_STORE_KEY)
+    const s = row ? (JSON.parse(row.value) as ClaudeUsageSnapshot) : null
+    return s && typeof s.fetchedAt === 'number' && s.raw ? s : null
+  } catch {
     return null
-  })().finally(() => {
-    claudeUsageInFlight = null
-  })
-  return claudeUsageInFlight
+  }
+}
+
+function storeClaudeUsage(s: ClaudeUsageSnapshot): void {
+  try {
+    runSilent('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', USAGE_STORE_KEY, JSON.stringify(s))
+  } catch {
+    // the in-memory copy still works
+  }
+}
+
+/** Claude Code's OAuth access token: ~/.claude/.credentials.json, or the login Keychain on macOS. */
+function readClaudeAccessToken(): string {
+  type Creds = { claudeAiOauth?: { accessToken?: string; expiresAt?: number } }
+  const pick = (c: Creds | null): string => {
+    const o = c?.claudeAiOauth
+    return o?.accessToken && (!o.expiresAt || o.expiresAt > Date.now()) ? o.accessToken : ''
+  }
+  try {
+    const file = join(homedir(), '.claude', '.credentials.json')
+    if (existsSync(file)) {
+      const t = pick(JSON.parse(readFileSync(file, 'utf8')) as Creds)
+      if (t) return t
+    }
+  } catch {
+    // unreadable
+  }
+  if (process.platform === 'darwin') {
+    try {
+      const r = spawnSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8', timeout: 4000 })
+      if (r.status === 0 && r.stdout.trim()) return pick(JSON.parse(r.stdout.trim()) as Creds)
+    } catch {
+      // no keychain entry
+    }
+  }
+  return ''
+}
+
+/** Claude Code caches the same endpoint's answer in ~/.claude.json; use it when it is newer than ours. */
+function adoptClaudeCliUsageCache(): void {
+  try {
+    const file = join(homedir(), '.claude.json')
+    if (!existsSync(file)) return
+    const c = (JSON.parse(readFileSync(file, 'utf8')) as { cachedUsageUtilization?: { fetchedAtMs?: number; utilization?: Record<string, RawWindow> } })
+      .cachedUsageUtilization
+    if (!c?.utilization || !c.fetchedAtMs || c.fetchedAtMs <= (claudeUsage?.fetchedAt ?? 0)) return
+    claudeUsage = { fetchedAt: c.fetchedAtMs, source: 'claude-cache', raw: c.utilization }
+    storeClaudeUsage(claudeUsage)
+  } catch {
+    // ignore
+  }
+}
+
+/** The end-to-end test points this at a local mock; only loopback URLs are accepted so a token never leaves the machine. */
+function claudeUsageUrl(): string {
+  const override = process.env.OMNI_CLAUDE_USAGE_URL
+  return override && /^http:\/\/127\.0\.0\.1:\d+\//.test(override) ? override : 'https://api.anthropic.com/api/oauth/usage'
+}
+
+async function refreshClaudeUsage(): Promise<void> {
+  claudeUsageLastAttempt = Date.now()
+  // Claude Code may have fetched very recently itself: no need to ask again
+  adoptClaudeCliUsageCache()
+  if (claudeUsage && Date.now() - claudeUsage.fetchedAt < USAGE_FORCE_INTERVAL) return
+  const token = readClaudeAccessToken()
+  if (!token) {
+    claudeUsageError = 'Claude Code sign-in not found or expired (run `claude` once to refresh it)'
+    claudeUsageBlockedUntil = Date.now() + USAGE_MIN_INTERVAL
+    return
+  }
+  let failure = ''
+  let retryAfterMs = 0
+  try {
+    const res = await fetch(claudeUsageUrl(), {
+      headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000)
+    })
+    if (res.ok) {
+      claudeUsage = { fetchedAt: Date.now(), source: 'api', raw: (await res.json()) as Record<string, RawWindow> }
+      storeClaudeUsage(claudeUsage)
+      claudeUsageBackoff = 0
+      claudeUsageBlockedUntil = 0
+      claudeUsageError = ''
+      claudeUsageDirty = false
+      return
+    }
+    retryAfterMs = (Number(res.headers.get('retry-after')) || 0) * 1000
+    failure =
+      res.status === 429
+        ? 'Anthropic is rate limiting usage checks'
+        : res.status === 401 || res.status === 403
+          ? 'Claude Code sign-in expired (run `claude` once to refresh it)'
+          : `usage check failed (HTTP ${res.status})`
+  } catch {
+    failure = 'could not reach Anthropic'
+  }
+  claudeUsageBackoff = Math.min(USAGE_MAX_BACKOFF, Math.max(USAGE_MIN_BACKOFF, claudeUsageBackoff * 2))
+  claudeUsageBlockedUntil = Date.now() + Math.max(retryAfterMs, claudeUsageBackoff)
+  claudeUsageError = failure
+}
+
+/** Latest Claude usage reading; refreshes it in the background when due (waits only on first load or a manual refresh). */
+async function getClaudeUsage(force = false): Promise<ClaudeUsageSnapshot | null> {
+  if (claudeUsage === undefined) claudeUsage = loadStoredClaudeUsage()
+  const now = Date.now()
+  const interval = force ? USAGE_FORCE_INTERVAL : claudeUsageDirty ? USAGE_AFTER_RUN_INTERVAL : USAGE_MIN_INTERVAL
+  const age = claudeUsage ? now - claudeUsage.fetchedAt : Infinity
+  const due = now >= claudeUsageBlockedUntil && now - claudeUsageLastAttempt >= Math.min(interval, USAGE_FORCE_INTERVAL) && age >= interval
+  if (due && !claudeUsageInFlight) {
+    claudeUsageInFlight = refreshClaudeUsage().finally(() => {
+      claudeUsageInFlight = null
+      statusCache = null
+    })
+  }
+  if (claudeUsageInFlight && (!claudeUsage || force)) await claudeUsageInFlight
+  return claudeUsage
+}
+
+const clockTime = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+/** "updated 4m ago · Anthropic is rate limiting usage checks, retrying at 3:42 PM" */
+function claudeUsageNote(s: ClaudeUsageSnapshot | null, nowMs: number): string {
+  const parts: string[] = []
+  if (s) {
+    const age = nowMs - s.fetchedAt
+    parts.push(`Live from Anthropic · updated ${age < 60_000 ? 'just now' : `${formatDurationShort(age)} ago`}`)
+  }
+  if (claudeUsageError && claudeUsageBlockedUntil > nowMs) parts.push(`${claudeUsageError}, retrying at ${clockTime(claudeUsageBlockedUntil)}`)
+  return parts.join(' · ')
 }
 
 // ───────────────────── Real token counts from the CLIs' own transcripts ─────────────────────
@@ -1251,8 +1361,19 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
     out.todayRequests = Math.max(today.reqs, tx.today.turns)
     out.weekTokens = Math.max(week.tokens, tx.week.tokens)
 
-    const live = await fetchLiveClaudeOAuthUsage(forceRefresh)
-    if (live) {
+    const snap = await getClaudeUsage(forceRefresh)
+    // A reading taken before the current 5-hour window started says nothing about it: estimate instead
+    const fiveResetAt = Date.parse(snap?.raw.five_hour?.resets_at ?? '')
+    const stale = !snap || (fiveResetAt <= nowMs && snap.fetchedAt < fiveResetAt) || nowMs - snap.fetchedAt > 24 * 3600_000
+    const live = snap && !stale
+      ? {
+          fiveHour: liveWindow(snap.raw.five_hour, nowMs),
+          sevenDay: liveWindow(snap.raw.seven_day, nowMs),
+          perModel: CLAUDE_PER_MODEL.filter((m) => snap.raw[m.key]?.utilization != null).map((m) => ({ ...m, window: liveWindow(snap.raw[m.key], nowMs) }))
+        }
+      : null
+    if (!live) out.liveNote = claudeUsageNote(null, nowMs) || undefined
+    if (live && snap) {
       const pct = rateEv?.status === 'rejected' ? 100 : live.fiveHour.pct
       out.source = 'live'
       out.utilizationPct = pct
@@ -1261,7 +1382,7 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
       out.resetInLabel = resetLabel(live.fiveHour.resetsAt, nowMs)
       out.weeklyUtilizationPct = live.sevenDay.pct
       out.weeklyResetInLabel = live.sevenDay.resetsAt ? `7d resets in ${formatDurationShort(Date.parse(live.sevenDay.resetsAt) - nowMs)}` : undefined
-      out.liveNote = `Live from Anthropic · weekly ${live.sevenDay.pct}%`
+      out.liveNote = claudeUsageNote(snap, nowMs)
       const modelTokens = (re: RegExp): { tokens: number; turns: number } => {
         let tokens = 0
         let turns = 0
@@ -1411,7 +1532,13 @@ export async function computeLimitInfo(cli: CliId, authenticated: boolean, detec
   out.resetsAt = resetsAt
   out.resetInLabel = resetLabel(resetsAt, nowMs)
   out.status = rateEv?.status === 'rejected' ? 'rejected' : rateEv?.status === 'warning' ? (utilizationPct >= 100 ? 'rejected' : 'warning') : statusFor(utilizationPct)
+  // A token-budget guess can't know the real limit: only the provider (a rejected run / rate event) can say it's used up
+  if (out.source !== 'live' && rateEv?.status !== 'rejected' && utilizationPct >= 100) {
+    out.utilizationPct = 99
+    out.status = 'warning'
+  }
   if (!out.liveNote && out.usedRequests > 0) out.liveNote = `${out.usedRequests} turns in 5h window (estimated budget)`
+  else if (out.liveNote && out.source !== 'live' && cli === 'claude') out.liveNote = `Estimated · ${out.liveNote}`
   return out
 }
 
@@ -1426,7 +1553,7 @@ export function recordCliUsage(opts: {
   durationMs: number
 }): void {
   if (opts.tokens <= 0 && opts.durationMs <= 0) return
-  if (opts.cli === 'claude') ((cachedClaudeOAuthUsage = null), (cachedClaudeTranscripts = null))
+  if (opts.cli === 'claude') ((claudeUsageDirty = true), (cachedClaudeTranscripts = null))
   if (opts.cli === 'agy') ((cachedAgyTranscripts = null), (cachedAgyQuota = null))
   if (opts.cli === 'codex') cachedCodexLive = null
   statusCache = null
@@ -1660,7 +1787,6 @@ export const clis = {
     if (!forceRefresh && statusInFlight) return statusInFlight
     if (forceRefresh) {
       dynamicAgyModels = null
-      cachedClaudeOAuthUsage = null
       cachedClaudeTranscripts = null
       cachedAgyTranscripts = null
       cachedAgyQuota = null

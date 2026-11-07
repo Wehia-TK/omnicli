@@ -42,6 +42,8 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 ### 2. 📊 Live Usage Limits & Quota Metering
 - Tracks live 5-hour rolling window usage, token counts, request counts, and reset countdowns.
 - Supports both **live OAuth usage fetching** and intelligent budget estimation heuristics.
+- **Claude live limits** come from the same Anthropic endpoint as Claude's own "Plan usage limits" panel (5-hour and weekly %). That endpoint allows only about one request a minute per login, shared with Claude Code itself, so Omni CLI asks at most every 3 minutes (1 minute after a run finishes, 30 s on a manual refresh) and backs off from 2 up to 30 minutes when it is rate limited. The last good reading is kept across restarts and labelled with its age ("updated 4m ago"), and the note says when the next retry is. On macOS the sign-in token is read from the Keychain.
+- A token-budget **estimate** never shows a limit as used up: only a real rejection from the provider turns a bar red at 100%.
 - Per-model and per-family quota bucket breakdown (e.g. Antigravity Claude vs. Gemini quotas).
 - Instant visual warnings before hitting provider rate-limit walls.
 

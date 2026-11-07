@@ -66,11 +66,38 @@ const restoreShortcuts = () => {
   }
 }
 
-const web = createServer((_q, r) => r.writeHead(200, { 'content-type': 'text/html' }).end('<html><head><title>preview</title></head><body><h1>hello</h1></body></html>'))
+// Fake home: a fake Claude login, so the app never reads (or sends) the real token and never touches ~/.claude
+const HOME = join(ROOT, 'home')
+mkdirSync(join(HOME, '.claude'), { recursive: true })
+writeFileSync(join(HOME, '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'e2e-token', expiresAt: Date.now() + 3600_000 } }))
+
+// Local page for the preview webview + a mock of Anthropic's usage endpoint (answers once, then rate limits)
+let usageCalls = 0
+const fiveReset = new Date(Date.now() + 3 * 3600_000).toISOString()
+const web = createServer((q, r) => {
+  if (q.url === '/api/oauth/usage') {
+    usageCalls++
+    if (q.headers.authorization !== 'Bearer e2e-token') return r.writeHead(401).end()
+    if (usageCalls > 1) return r.writeHead(429, { 'content-type': 'application/json' }).end('{"error":{"type":"rate_limit_error"}}')
+    return r
+      .writeHead(200, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ five_hour: { utilization: 42, resets_at: fiveReset }, seven_day: { utilization: 27, resets_at: new Date(Date.now() + 3 * 86400_000).toISOString() }, seven_day_opus: null }))
+  }
+  r.writeHead(200, { 'content-type': 'text/html' }).end('<html><head><title>preview</title></head><body><h1>hello</h1></body></html>')
+})
 await new Promise((r) => web.listen(0, '127.0.0.1', r))
 const webUrl = `http://127.0.0.1:${web.address().port}/`
 
-const env = { ...process.env, GIT_AUTHOR_NAME: 'Omni E2E', GIT_AUTHOR_EMAIL: 'e2e@example.com', GIT_COMMITTER_NAME: 'Omni E2E', GIT_COMMITTER_EMAIL: 'e2e@example.com' }
+const env = {
+  ...process.env,
+  HOME,
+  USERPROFILE: HOME,
+  OMNI_CLAUDE_USAGE_URL: `${webUrl}api/oauth/usage`,
+  GIT_AUTHOR_NAME: 'Omni E2E',
+  GIT_AUTHOR_EMAIL: 'e2e@example.com',
+  GIT_COMMITTER_NAME: 'Omni E2E',
+  GIT_COMMITTER_EMAIL: 'e2e@example.com'
+}
 delete env.ELECTRON_RUN_AS_NODE
 delete env.ELECTRON_RENDERER_URL
 const appFlags = [`--user-data-dir=${PROFILE}`, '--enable-logging']
@@ -210,8 +237,16 @@ try {
   await T('skills.remove refuses folders outside skill dirs', `return await ${A}('skills.remove', ${JSON.stringify(join(PROJ, 'SKILL.md'))})`, errMatch(/Only installed/))
   await T('mcp.add rejects bad env var names', `return await ${A}('mcp.add', { name: 'x', type: 'stdio', command: 'node', env: { 'A = 1\\n[evil]': 'v' } }, ['codex'])`, errMatch(/not a valid environment variable/))
   await T('mcp.list', `return Array.isArray(await ${A}('mcp.list'))`, (v) => v === true)
-  const st = await T('clis.statusAll', `return (await ${A}('clis.statusAll', true)).map((c) => c.id + ':' + (c.installed ? 'installed' : 'missing') + ':' + (c.authenticated ? 'signed-in' : 'signed-out'))`, (v) => Array.isArray(v) && v.length === 4)
+  const st = await T('clis.statusAll', `return (await ${A}('clis.statusAll')).map((c) => c.id + ':' + (c.installed ? 'installed' : 'missing') + ':' + (c.authenticated ? 'signed-in' : 'signed-out'))`, (v) => Array.isArray(v) && v.length === 4)
   console.log(`      detected: ${JSON.stringify(st)}`)
+  // Provider usage endpoints are rate limited: a repeat (even forced) refresh must be served from cache, not refetched
+  const claudeLimit = `const l = (await ${A}('clis.statusAll', FORCE)).find((c) => c.id === 'claude').limit; return [l.source, l.utilizationPct, l.weeklyUtilizationPct ?? null, l.liveNote ?? '']`
+  const first = await ev(claudeLimit.replace('FORCE', 'false'))
+  check('Claude live limits read from the usage endpoint', first?.[0] === 'live' && first[1] === 42 && first[2] === 27 && /Live from Anthropic · updated just now/.test(first[3]), JSON.stringify(first))
+  const again = await ev(claudeLimit.replace('FORCE', 'true'))
+  const again2 = await ev(claudeLimit.replace('FORCE', 'false'))
+  check('repeat and forced refreshes are served from cache (no refetch)', usageCalls === 1 && JSON.stringify(first) === JSON.stringify(again) && JSON.stringify(again) === JSON.stringify(again2), `${usageCalls} calls ${JSON.stringify([again, again2])}`)
+  console.log(`      claude limit: ${JSON.stringify(first)}`)
   await T('updates.check', `return await ${A}('updates.check', false)`, (v) => (PACKAGED ? v?.supported === false && /installed build/.test(v.reason) : v?.supported === true))
   await T('terminal start/send/output/stop', `
     let out = ''; const off = window.aihub.onTerminalOutput((e) => { if (e.sessionId === 'smoke') out += e.data })
