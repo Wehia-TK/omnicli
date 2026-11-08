@@ -343,4 +343,4 @@ Omni CLI is an independent project, not affiliated with or endorsed by Anthropic
 
 ## 📄 License
 
-Released under the [MIT License](LICENSE) © Yehia Tarek Khedr.
+Released under the [MIT License](LICENSE) © Wehia-TK.
