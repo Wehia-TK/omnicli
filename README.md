@@ -91,6 +91,7 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 - Integrated git status controls: branch inspection, dirty file counters, and interactive diff hunk reviews.
 
 ### 5. 💻 Embedded Interactive Terminal & Tasks
+- Every detected CLI is on the terminal's `PATH`, even when it isn't on your system `PATH` (e.g. Claude Code bundled with the desktop app, or a custom path set in Settings), so `claude login`, `codex login` and the account sign-in window just work.
 - High-performance native terminal sessions powered by `@lydell/node-pty` and `@xterm/xterm` (with `@xterm/addon-fit`).
 - Support for interactive conversational threads and queued background tasks.
 - **Message queue with "Send now"**: while an AI is working, press Enter (or **Queue**) to queue follow-ups that run automatically when the current turn ends. Use **Send now** to interrupt the current run and send right away, from the composer or from any queued message.

@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import type { CliId, TerminalOutputEvent } from '@shared/types'
 import { findCliExecutable } from './clis'
@@ -76,6 +77,34 @@ export function stopAllTerminals(): void {
 
 const psq = (s: string): string => `'${s.replace(/'/g, "''")}'`
 
+const TERMINAL_CLIS: CliId[] = ['claude', 'agy', 'codex', 'copilot']
+
+/**
+ * The CLIs Omni CLI detected aren't always on the user's PATH (e.g. Claude Code bundled with the desktop app,
+ * or a custom path in Settings), so typing `claude login` in the embedded terminal would fail.
+ * Prepend each detected CLI's folder to PATH for terminal sessions.
+ */
+function shellEnv(extraEnv: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), ...extraEnv }
+  const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH'
+  const sep = isWin ? ';' : ':'
+  const current = (env[pathKey] ?? '').split(sep).filter(Boolean)
+  const norm = (p: string): string => (isWin ? p.toLowerCase() : p).replace(/[\\/]+$/, '')
+  const known = new Set(current.map(norm))
+  const extra: string[] = []
+  for (const cli of TERMINAL_CLIS) {
+    const exe = findCliExecutable(cli)
+    if (!exe) continue
+    const dir = dirname(exe)
+    if (!known.has(norm(dir))) {
+      known.add(norm(dir))
+      extra.push(dir)
+    }
+  }
+  env[pathKey] = [...extra, ...current].join(sep)
+  return env
+}
+
 export const terminal = {
   /** True when a real pseudo-terminal is available — interactive TUIs and logins render correctly. */
   isPty: (): boolean => Boolean(loadPty()),
@@ -92,7 +121,7 @@ export const terminal = {
         cols: Math.max(20, cols),
         rows: Math.max(5, rows),
         cwd: workDir,
-        env: { ...process.env, ...extraEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+        env: { ...shellEnv(extraEnv), TERM: 'xterm-256color', COLORTERM: 'truecolor' },
         ...(isWin ? { useConpty: true } : {})
       })
       sessions.set(sessionId, { cwd: workDir, pty: term })
@@ -107,8 +136,8 @@ export const terminal = {
 
     // Fallback: plain pipes (no TUI support)
     const proc = isWin
-      ? spawn('powershell.exe', ['-NoLogo', '-NoExit', '-Command', '-'], { cwd: workDir, windowsHide: true, env: { ...process.env, ...extraEnv, TERM: 'xterm-256color' } })
-      : spawn(defaultShell, ['-i'], { cwd: workDir, env: { ...process.env, ...extraEnv, TERM: 'xterm-256color' } })
+      ? spawn('powershell.exe', ['-NoLogo', '-NoExit', '-Command', '-'], { cwd: workDir, windowsHide: true, env: { ...shellEnv(extraEnv), TERM: 'xterm-256color' } })
+      : spawn(defaultShell, ['-i'], { cwd: workDir, env: { ...shellEnv(extraEnv), TERM: 'xterm-256color' } })
     sessions.set(sessionId, { cwd: workDir, proc })
     emitter({ sessionId, stream: 'system', data: `Connected to ${isWin ? 'PowerShell' : defaultShell} in ${workDir} (basic mode)\r\n` })
     proc.stdout?.setEncoding('utf8')
