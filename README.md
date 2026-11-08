@@ -158,7 +158,7 @@ Optional: [graphify](https://pypi.org/project/graphifyy/) (`pip install graphify
 ### Option A: download an installer
 
 1. Grab the latest build from [**Releases**](https://github.com/Wehia-TK/omnicli/releases):
-   - **Windows**: `Omni CLI Setup <version>.exe`
+   - **Windows**: `Omni.CLI.Setup.<version>.exe`
    - **macOS**: `Omni CLI-<version>.dmg` (Intel) or `Omni CLI-<version>-arm64.dmg` (Apple Silicon)
 2. Run it. Builds are **not code-signed** yet, so the first launch needs one extra click:
    - **Windows SmartScreen**: **More info → Run anyway**.
