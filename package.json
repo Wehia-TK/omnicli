@@ -7,13 +7,13 @@
   "private": true,
   "license": "MIT",
   "author": "Yehia Tarek Khedr",
-  "homepage": "https://github.com/YehiaTarekKhedr/omnicli#readme",
+  "homepage": "https://github.com/Wehia-TK/omnicli#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YehiaTarekKhedr/omnicli.git"
+    "url": "git+https://github.com/Wehia-TK/omnicli.git"
   },
   "bugs": {
-    "url": "https://github.com/YehiaTarekKhedr/omnicli/issues"
+    "url": "https://github.com/Wehia-TK/omnicli/issues"
   },
   "engines": {
     "node": ">=22.18.0"
@@ -26,6 +26,7 @@
     "dist:mac": "electron-vite build && electron-builder --mac",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning --test test/*.test.mts",
     "test:e2e": "node scripts/e2e.mjs",
+    "screenshots": "node scripts/screenshots.mjs",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "build": {

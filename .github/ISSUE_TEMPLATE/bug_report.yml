@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in Omni CLI doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! For security problems, please use a private advisory instead (see SECURITY.md).
+        Remove tokens, emails and private paths from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a project
+        2. Start a Claude Code session in a worktree
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows 11, Windows 10, macOS (Apple Silicon), macOS (Intel)]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Omni CLI version
+      description: Installer version, or the git commit if you run from source (`git rev-parse --short HEAD`).
+    validations:
+      required: true
+  - type: checkboxes
+    id: clis
+    attributes:
+      label: Which CLIs are involved?
+      options:
+        - label: Claude Code
+        - label: Antigravity
+        - label: Codex
+        - label: Copilot
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      render: text

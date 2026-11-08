@@ -5,7 +5,7 @@
 Please **do not open a public issue** for security problems.
 
 Report them privately through GitHub: **Security → Report a vulnerability** on
-[YehiaTarekKhedr/omnicli](https://github.com/YehiaTarekKhedr/omnicli/security/advisories/new).
+[Wehia-TK/omnicli](https://github.com/Wehia-TK/omnicli/security/advisories/new).
 Include the affected version or commit, steps to reproduce, and the impact you expect.
 
 You should get a reply within 7 days. Fixes land on `master`, and the advisory is published once a fix is available.

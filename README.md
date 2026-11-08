@@ -1,15 +1,24 @@
-# Omni CLI
-
 <div align="center">
 
-**A centralized desktop workspace for all your AI CLI subscriptions.**
+<img src="build/icon.png" alt="Omni CLI logo" width="96" height="96" />
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-7.0-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
+# Omni CLI
+
+**One desktop workspace for all your AI coding CLIs: Claude Code, Antigravity, Codex and Copilot.**
+
+Live usage limits · parallel git worktrees · a knowledge base every agent shares
+
+[![CI](https://github.com/Wehia-TK/omnicli/actions/workflows/ci.yml/badge.svg)](https://github.com/Wehia-TK/omnicli/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg)](#-installation)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg?logo=electron)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react)](https://react.dev/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC.svg?logo=tailwind-css)](https://tailwindcss.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![CI](https://github.com/YehiaTarekKhedr/omnicli/actions/workflows/ci.yml/badge.svg)](https://github.com/YehiaTarekKhedr/omnicli/actions/workflows/ci.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7.0-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+[Screenshots](#-screenshots) · [Install](#-installation) · [Quick start](#-quick-start) · [Features](#-key-features) · [FAQ](#-faq--troubleshooting) · [Contributing](#-contributing)
+
+<img src="docs/screenshots/workspace.png" alt="Omni CLI agent workspace: a Claude Code session with its thinking, tool calls and final answer" width="900" />
 
 </div>
 
@@ -25,6 +34,23 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 - **Isolated Git worktree execution** so multiple AI agents can work in parallel on the same repository without collisions.
 - **Embedded interactive PTY terminals** (PowerShell on Windows, Zsh/Bash on macOS) with live model and effort level selectors.
 - **Cross-platform desktop design** with platform-native titlebars (macOS traffic lights via `hiddenInset` and custom frameless controls on Windows).
+
+---
+
+## 📸 Screenshots
+
+| Agent workspace | Review changes |
+| :---: | :---: |
+| <img src="docs/screenshots/workspace.png" alt="Agent workspace with a live Claude Code session" width="440" /> | <img src="docs/screenshots/changes.png" alt="Side-by-side diff of the files an agent changed, with per-hunk undo" width="440" /> |
+| Thinking, tool calls and answers stream in live; reply in the composer below. | Side-by-side diffs of everything the agent touched, with per-hunk **Undo change**. |
+| **Live usage limits** | **Task queue** |
+| <img src="docs/screenshots/live-limits.png" alt="Live 5-hour and weekly quota bars for Claude Code and Antigravity" width="440" /> | <img src="docs/screenshots/task-queue.png" alt="Unattended task queue with tasks assigned to Codex, Claude and Antigravity" width="440" /> |
+| 5-hour and weekly windows per subscription, straight from each provider. | Queue work for any CLI; each task runs in its own git worktree. |
+| **Shared knowledge base** | |
+| <img src="docs/screenshots/knowledge-base.png" alt="Project knowledge base with conventions shared across all AIs" width="440" /> | |
+| Notes, conventions and handoffs every agent reads, synced to `.ai-kb/`. | |
+
+<sub>Screenshots show a demo project. Regenerate them with `npm run build && npm run screenshots`.</sub>
 
 ---
 
@@ -112,40 +138,71 @@ Omni CLI (Electron App)
 
 ---
 
-## 🚀 Getting Started
+## 📦 Installation
 
-### Prerequisites
+### Requirements
 
-- **Operating System**: Windows 10/11 or macOS 12+ (Apple Silicon M-Series & Intel)
-- **Node.js**: `v22.18` or later (the Vite 8 / TypeScript 7 toolchain and the TypeScript unit tests need it; the app itself runs on Electron's bundled Node)
-- **npm** or compatible package manager
-- **Git**: Installed and available in your system `PATH`
-- **Supported AI CLIs** (install whichever you use):
-  - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) (`claude`)
-  - [Google Antigravity](https://antigravity.google) (`agy`)
-  - [OpenAI Codex](https://github.com/openai/codex) (`codex`)
-  - [GitHub Copilot CLI](https://github.com/github/copilot-cli) (`copilot`, installed with `npm install -g @github/copilot`; VS Code's built-in `copilot` launcher is not the CLI and is ignored)
+- **Windows 10/11** or **macOS 12+** (Apple Silicon or Intel)
+- **Git** on your `PATH`
+- At least one AI CLI, installed and signed in. Omni CLI uses each CLI's own login and never asks for passwords or API keys.
 
-### Installation
+| CLI | Command | Install |
+| :--- | :--- | :--- |
+| [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) | `claude` | `npm install -g @anthropic-ai/claude-code`, then run `claude` to sign in |
+| [Google Antigravity](https://antigravity.google) | `agy` | Installer from [antigravity.google](https://antigravity.google) |
+| [OpenAI Codex](https://github.com/openai/codex) | `codex` | `npm install -g @openai/codex`, then `codex login` |
+| [GitHub Copilot CLI](https://github.com/github/copilot-cli) | `copilot` | `npm install -g @github/copilot` (VS Code's built-in `copilot` launcher is not the CLI and is ignored) |
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/YehiaTarekKhedr/omnicli.git
-   cd omnicli
-   ```
+Optional: [graphify](https://pypi.org/project/graphifyy/) (`pip install graphifyy`) adds a code graph to *Scan repo*, and an existing Voice Studio install enables accurate local voice input (see [Key Features](#-key-features)).
 
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+### Option A: download an installer
 
-3. **Run it**:
-   ```bash
-   npm run dev
-   ```
-   On Windows you can also double-click `Start Omni CLI.bat` (builds once, then launches without a console window).
+1. Grab the latest build from [**Releases**](https://github.com/Wehia-TK/omnicli/releases):
+   - **Windows**: `Omni CLI Setup <version>.exe`
+   - **macOS**: `Omni CLI-<version>.dmg` (Intel) or `Omni CLI-<version>-arm64.dmg` (Apple Silicon)
+2. Run it. Builds are **not code-signed** yet, so the first launch needs one extra click:
+   - **Windows SmartScreen**: **More info → Run anyway**.
+   - **macOS Gatekeeper**: right-click *Omni CLI* in Applications → **Open** → **Open**.
 
-4. **Add a project**: a fresh install starts empty. Create a project, point it at a local folder, and sign in to whichever CLIs you use (each CLI keeps its own login; Omni CLI never asks for passwords or API keys).
+No installer for your platform on the Releases page? Build one yourself with Option C.
+
+### Option B: run from source
+
+Needs **Node.js 22.18+** and npm (the Vite 8 / TypeScript 7 toolchain needs it; the app itself runs on Electron's bundled Node).
+
+```bash
+git clone https://github.com/Wehia-TK/omnicli.git
+cd omnicli
+npm install
+npm run dev
+```
+
+On Windows you can afterwards double-click `Start Omni CLI.bat`: it builds once, then launches without a console window. Running from a git checkout also enables the in-app **Pull & restart** updater.
+
+### Option C: build your own installer
+
+```bash
+npm install
+npm run dist       # Windows → release/Omni CLI Setup <version>.exe
+npm run dist:mac   # macOS (run on a Mac) → release/*.dmg and *.zip
+```
+
+### Uninstall
+
+- **Windows**: *Settings → Apps → Installed apps → Omni CLI → Uninstall*.
+- **macOS**: drag *Omni CLI* from Applications to the Trash.
+- App data (projects, sessions, settings) lives in `%APPDATA%\Omni CLI` on Windows and `~/Library/Application Support/Omni CLI` on macOS. Delete it to start fresh. Your repositories and their `.ai-kb/` folders are never touched.
+
+---
+
+## 🏁 Quick start
+
+1. **Sign in to your CLIs** in any terminal (`claude`, `codex login`, …) or in Omni CLI's built-in **Terminal**. Click **Limits** in the title bar to see which ones are connected; signed-out ones are greyed out.
+2. **Add a project**: click **+** next to *Projects* and pick a local folder. A git repository works best; Omni CLI can `git init` one for you.
+3. **Seed the knowledge base** (optional): **Knowledge Base → Scan Codebase**, then add your own conventions and decisions. Every agent receives them.
+4. **Start a session**: **New AI Session**, then pick the CLI, model, effort and permission mode in the composer, choose **Local Checkout** or **Isolated Git Worktree**, and send your prompt.
+5. **Review and ship**: follow the live stream, inspect the **Changes** tab, run **Check** (the project's test command) and **Push**.
+6. **Queue more work** in **Task Queue** to run unattended, or schedule recurring runs. When a subscription hits its limit, the next account or CLI continues with the same context.
 
 ---
 
@@ -159,6 +216,7 @@ Omni CLI (Electron App)
 | `npm test` | Unit tests (Node's built-in test runner): IPC/navigation security rules and shell-free CLI launching. |
 | `npm run test:e2e` | After `npm run build`: launches the app in a throw-away profile, drives it over the DevTools protocol and checks the security boundaries plus the main API (no AI runs, costs nothing; never touches a running Omni CLI). Add `-- --exe "release/win-unpacked/Omni CLI.exe"` to test a packaged build. |
 | `npm run check` | Typecheck + unit tests + build in one go. |
+| `npm run screenshots` | After `npm run build`: regenerates the README screenshots in `docs/screenshots/` from a demo project in a throw-away profile (no AI runs, local paths masked). |
 | `npm run dist` | Builds production assets and packages a Windows installer (`.exe`) via `electron-builder`. |
 | `npm run dist:mac` | Builds production assets and packages macOS bundles (`.dmg` & `.zip`) via `electron-builder`. |
 
@@ -184,7 +242,9 @@ Omni CLI (Electron App)
 │   │   │   ├── lib/            # Markdown renderer, API bindings, date utils
 │   │   │   └── App.tsx         # Main UI layout & state orchestrator
 │   └── shared/                 # Shared TypeScript interfaces, types, and constants
+├── docs/screenshots/           # README screenshots (npm run screenshots)
 ├── scripts/e2e.mjs             # End-to-end security & API smoke test (npm run test:e2e)
+├── scripts/screenshots.mjs     # Regenerates docs/screenshots from a demo project
 ├── test/                       # Unit tests (npm test)
 ├── .github/workflows/ci.yml    # CI: typecheck, tests, build, audit (Windows + macOS), e2e (Windows)
 ├── electron.vite.config.ts     # Multi-target Vite build configuration
@@ -212,12 +272,75 @@ Omni CLI (Electron App)
 
 ---
 
+## ❓ FAQ & Troubleshooting
+
+<details>
+<summary><b>A CLI shows as "Greyed out" or "Not installed"</b></summary>
+
+Omni CLI looks for each CLI on your `PATH`, in Homebrew and in the standard install folders. Check that the command works in a new terminal (`claude --version`, `codex --version`, …). If it lives somewhere unusual, set its full path in **Settings** (gear icon), then click **Re-check CLI Authentication** in the Limits window.
+</details>
+
+<details>
+<summary><b>Claude limits say "rate limited" or show an older reading</b></summary>
+
+Anthropic's usage endpoint allows about one request a minute per login, shared with Claude Code itself. Omni CLI keeps the last good reading (labelled with its age) and retries on its own with back-off. Nothing needs fixing.
+</details>
+
+<details>
+<summary><b>Do I need API keys? Does it cost extra?</b></summary>
+
+No. Omni CLI drives the CLIs you already have, on their own subscription logins (Claude Pro/Max, ChatGPT Plus/Pro, Copilot, Antigravity). It has no servers of its own.
+</details>
+
+<details>
+<summary><b>Is Bypass mode safe?</b></summary>
+
+Only on code you trust, ideally in a worktree. See [Security & Privacy](#-security--privacy).
+</details>
+
+<details>
+<summary><b>The installer is flagged as from an unknown publisher</b></summary>
+
+Builds aren't code-signed yet. On Windows click **More info → Run anyway**; on macOS right-click the app and choose **Open**. Or build from source.
+</details>
+
+<details>
+<summary><b><code>npm install</code> fails</b></summary>
+
+Check you're on Node.js 22.18 or later (`node --version`). The terminal uses the prebuilt `@lydell/node-pty`, so no C++ toolchain is needed on Windows x64 or macOS. Delete `node_modules` and try again.
+</details>
+
+Still stuck? [Open an issue](https://github.com/Wehia-TK/omnicli/issues/new/choose) with your OS, app version and the steps to reproduce.
+
+---
+
+## 🗺️ Roadmap
+
+- Signed / notarized installers with auto-update for packaged builds
+- Linux support
+- Multiple accounts for Copilot and Antigravity
+- More CLIs as they ship stable non-interactive modes
+
+Ideas are welcome in [issues](https://github.com/Wehia-TK/omnicli/issues).
+
+---
+
 ## 🤝 Contributing
 
-Issues and pull requests are welcome. Please run `npm run check` (and `npm run test:e2e` for changes to the main process, preload or process launching) before opening a PR, and keep the README in sync with what you change. Report security problems privately as described in [SECURITY.md](SECURITY.md).
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the checks to run and what makes a good PR. In short: run `npm run check` (plus `npm run test:e2e` for changes to the main process, preload or process launching) and keep the README in sync with what you change.
+
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report security problems privately as described in [SECURITY.md](SECURITY.md).
+
+---
+
+## 🙏 Acknowledgments
+
+Built on [Electron](https://www.electronjs.org/), [electron-vite](https://electron-vite.org/), [React](https://react.dev/), [Tailwind CSS](https://tailwindcss.com/), [xterm.js](https://xtermjs.org/), [node-pty](https://github.com/microsoft/node-pty), [Lucide](https://lucide.dev/) and [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx).
+
+Omni CLI is an independent project, not affiliated with or endorsed by Anthropic, Google, OpenAI or GitHub. Product names belong to their owners.
 
 ---
 
 ## 📄 License
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE) © Yehia Tarek Khedr.
