@@ -8,11 +8,11 @@ Report them privately through GitHub: **Security → Report a vulnerability** on
 [Wehia-TK/omnicli](https://github.com/Wehia-TK/omnicli/security/advisories/new).
 Include the affected version or commit, steps to reproduce, and the impact you expect.
 
-You should get a reply within 7 days. Fixes land on `master`, and the advisory is published once a fix is available.
+You should get a reply within 7 days. Fixes land on `main`, and the advisory is published once a fix is available.
 
 ## Supported versions
 
-Only the latest commit on `master` is supported. Use **Pull & restart** in the title bar (or `git pull`) to stay current.
+Only the latest commit on `main` is supported. Use **Pull & restart** in the title bar (or `git pull`) to stay current.
 
 ## Threat model
 

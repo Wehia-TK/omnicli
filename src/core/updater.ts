@@ -1,23 +1,19 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { join } from 'node:path'
 import type { UpdateInfo } from '@shared/types'
 
 /**
  * Self-update for the source checkout Omni CLI runs from (`npm run dev` / Start Omni CLI.bat).
  *
  * "An update" = anything the running process doesn't have yet:
- *  - source files edited since launch (e.g. an AI just changed this app) that need a restart
- *    (main / preload / core / shared / package files — renderer edits are already hot-reloaded),
- *  - commits made since launch,
+ *  - commits made since launch (plain file edits that aren't committed are NOT updates),
  *  - commits on the upstream branch that haven't been pulled (only when a remote is configured).
  */
 
 let root = ''
 let packaged = false
 let launchedAt = Date.now()
-let baselineAt = Date.now()
 let launchHead = ''
 let restart: () => void = () => undefined
 let applying = false
@@ -43,53 +39,19 @@ export async function initUpdater(opts: { root: string; packaged: boolean; resta
   packaged = opts.packaged
   restart = opts.restart
   launchedAt = Date.now()
-  baselineAt = launchedAt
-  if (!packaged && !process.env.ELECTRON_RENDERER_URL) {
-    try {
-      const outStat = await stat(join(root, 'out', 'main', 'index.js'))
-      baselineAt = Math.min(launchedAt, outStat.mtimeMs)
-    } catch {
-      // fallback to launchedAt
-    }
-  }
   if (!packaged && existsSync(join(root, '.git'))) {
     const head = await git(['rev-parse', 'HEAD'])
     launchHead = head.ok ? head.out : ''
   }
 }
 
+/** Files changed by commits made since launch (uncommitted edits and file timestamps are deliberately ignored). */
 async function changedSinceLaunch(): Promise<string[]> {
-  const out: string[] = []
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    let entries
-    try {
-      entries = await readdir(dir, { withFileTypes: true })
-    } catch {
-      return
-    }
-    for (const e of entries) {
-      if (e.name === 'node_modules' || e.name.startsWith('.')) continue
-      const full = join(dir, e.name)
-      if (e.isDirectory()) {
-        if (depth < 8) await walk(full, depth + 1)
-      } else {
-        try {
-          if ((await stat(full)).mtimeMs > baselineAt) out.push(relative(root, full).replace(/\\/g, '/'))
-        } catch {
-          // deleted meanwhile
-        }
-      }
-    }
-  }
-  for (const d of WATCH_DIRS) await walk(join(root, d), 0)
-  for (const f of WATCH_FILES) {
-    try {
-      if ((await stat(join(root, f))).mtimeMs > baselineAt) out.push(f)
-    } catch {
-      // missing
-    }
-  }
-  return out.sort()
+  if (!launchHead) return []
+  const r = await git(['diff', '--name-only', launchHead, 'HEAD'])
+  if (!r.ok) return []
+  const watched = (f: string): boolean => WATCH_FILES.includes(f) || WATCH_DIRS.some((d) => f.startsWith(d + '/'))
+  return r.out.split('\n').map((f) => f.trim()).filter((f) => f && watched(f)).sort()
 }
 
 /** Renderer files are hot-reloaded only when electron-vite dev is attached; otherwise a build + restart applies them. */
@@ -102,7 +64,7 @@ const parseLog = (raw: string): { hash: string; subject: string }[] =>
     .map((l) => ({ hash: l.split('\t')[0], subject: l.split('\t').slice(1).join('\t') }))
 
 /**
- * The ref teammates merge into: the branch's upstream, else the remote's default branch (origin/HEAD → origin/main → origin/master).
+ * The ref teammates merge into: the branch's upstream, else the remote's default branch (origin/HEAD → origin/main → origin/master, for older repos).
  * Returns '' when there is no remote to compare against.
  */
 async function trackingRef(): Promise<string> {
@@ -140,7 +102,11 @@ export const updater = {
 
     let remoteCommits: { hash: string; subject: string }[] = []
     let remote = ''
-    if (fetchRemote && (await git(['remote', 'get-url', 'origin'])).ok) await git(['fetch', '--quiet', 'origin'], 30_000)
+    if (fetchRemote && (await git(['remote', 'get-url', 'origin'])).ok) {
+      await git(['fetch', '--quiet', '--prune', 'origin'], 30_000)
+      // follow a renamed default branch (e.g. master -> main) so origin/HEAD isn't stale
+      await git(['remote', 'set-head', 'origin', '--auto'], 15_000)
+    }
     const tracking = await trackingRef()
     if (tracking) {
       remote = tracking
@@ -190,7 +156,6 @@ export const updater = {
       }
 
       const depsChanged =
-        (await changedSinceLaunch()).some((f) => f === 'package.json' || f === 'package-lock.json') ||
         (launchHead && (await git(['diff', '--name-only', launchHead, 'HEAD', '--', 'package.json', 'package-lock.json'])).out.trim() !== '')
       if (depsChanged) {
         const inst = await sh('npm', ['install', '--no-audit', '--no-fund'], 10 * 60_000)
