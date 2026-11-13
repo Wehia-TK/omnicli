@@ -91,6 +91,151 @@ export interface Schedule {
   last_run_at: number | null
   next_run_at: number | null
   created_at: string
+  /** When set, the schedule hands its prompt to this team's top role instead of running one AI directly */
+  team_id?: number | null
+}
+
+// ───────────────────────────── Teams (agent hierarchies) ─────────────────────────────
+
+/** manager = plans, delegates and reviews (never edits); worker = does one job; script = a fixed command, no tokens */
+export type TeamRoleKind = 'manager' | 'worker' | 'script'
+
+export interface Team {
+  id: number
+  name: string
+  /** JSON array of `cli:model` keys managers may assign; `[]` = every signed-in model (Fable is never offered) */
+  allowed_models: string
+  /** Most roles the team may ever hold, the top role included */
+  max_roles: number
+  /** Most levels in the org chart, the top role included */
+  max_depth: number
+  /** Follow-up delegation rounds a manager may run after its first one */
+  max_rounds: number
+  /** Per-run budget in cost-weighted tokens (a token on the most expensive model counts as 1) */
+  token_budget: number
+  /** Word cap on the report each role sends up to its manager */
+  report_words: number
+  /** 1 = agents start without MCP servers, skills or sub-agent tools (smaller starting context) */
+  lean: number
+  /** 1 = a manager's new hires wait for the user's approval */
+  approve_hires: number
+  created_at: string
+  roles?: TeamRole[]
+}
+
+export interface TeamRole {
+  id: number
+  team_id: number
+  /** null = the top role */
+  parent_id: number | null
+  title: string
+  /** Standing job description (for the top role: its mission) */
+  job: string
+  kind: TeamRoleKind
+  /** Last model this role ran on (its manager picks one per assignment unless `locked`) */
+  cli: CliId | ''
+  model: string
+  effort: EffortLevel
+  /** Script roles only: the command the app runs */
+  command: string
+  /** 1 = managers may not change this role's model */
+  locked: number
+  hired_by: 'user' | 'manager'
+  created_at: string
+}
+
+export type TeamRunState = 'running' | 'done' | 'failed' | 'stopped'
+
+export interface TeamRun {
+  id: number
+  team_id: number
+  project_id: number
+  /** The role the task was given to (usually the top role) */
+  role_id: number
+  prompt: string
+  state: TeamRunState
+  permission_mode: PermissionMode
+  checkout_mode: CheckoutMode
+  /** A follow-up continues this earlier run's branch and top-role session */
+  continues_run_id: number | null
+  result: string
+  error: string
+  created_at: string
+  done_at: string | null
+  // Aggregates filled in by the API
+  role_title?: string
+  root_task_id?: number | null
+  branch?: string | null
+  steps_total?: number
+  steps_done?: number
+  tokens?: number
+  /** Tokens weighted by each step's model cost */
+  weighted?: number
+  /** The same tokens weighted as if every step had run on the top role's model */
+  weighted_top?: number
+  cost_usd?: number
+  top_model?: string
+}
+
+export type TeamStepState = 'pending' | 'planning' | 'approval' | 'waiting' | 'reviewing' | 'working' | 'done' | 'failed' | 'skipped'
+
+/** One role working on one assignment inside a run. */
+export interface TeamStep {
+  id: number
+  run_id: number
+  role_id: number
+  parent_step_id: number | null
+  /** The hidden project_tasks row (kind = 'agent') holding this role's CLI session and log */
+  task_id: number | null
+  seq: number
+  /** Which of the parent's delegation rounds this step belongs to */
+  round: number
+  brief: string
+  access: 'read' | 'write'
+  cli: CliId | ''
+  model: string
+  effort: EffortLevel
+  state: TeamStepState
+  /** Last turn launched: plan / review (managers) or work */
+  phase: '' | 'plan' | 'review' | 'work'
+  /** Delegation rounds this step has started */
+  rounds: number
+  report: string
+  error: string
+  notes: string
+  tokens: number
+  cost_usd: number
+  run_ms: number
+  /** Assignments waiting for the user's hire approval (JSON) */
+  plan_json: string
+  created_at: string
+  role_title?: string
+  role_kind?: TeamRoleKind
+}
+
+/** A model a manager can be allowed to assign, with its estimated relative cost. */
+export interface TeamModelOption {
+  key: string
+  cli: CliId
+  cliName: string
+  model: string
+  name: string
+  /** Estimated cost per token relative to the most expensive tier (1 = Opus-class) */
+  weight: number
+  ready: boolean
+}
+
+/** A new hire or assignment proposed by a manager (shown when hires need approval). */
+export interface TeamAssignment {
+  roleId: number | null
+  title: string
+  kind: TeamRoleKind
+  job: string
+  cli: CliId | ''
+  model: string
+  effort: EffortLevel
+  access: 'read' | 'write'
+  brief: string
 }
 
 export interface McpServerEntry {
@@ -209,7 +354,8 @@ export interface MentionItem {
 export interface ProjectTask {
   id: number
   project_id: number
-  kind: 'thread' | 'task'
+  /** 'agent' = a team role's session (core/teams.ts); hidden from the session list and the task queue */
+  kind: 'thread' | 'task' | 'agent'
   title: string
   notes: string
   status: ProjectTaskStatus

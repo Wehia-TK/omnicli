@@ -34,6 +34,7 @@ import {
   SquareTerminal,
   Terminal,
   Trash2,
+  Users,
   X,
   Brain,
   Zap,
@@ -58,6 +59,7 @@ import { ApprovalCards, BrowserPreview, DiffReview, ImageThumb, McpModal, PrButt
 import { attachToComposer } from './components/SubscriptionComposer'
 import { Download, Globe, Plug, ScrollText, Search, ShieldCheck as ShieldOk, Wand2 } from 'lucide-react'
 import { KnowledgeBaseView } from './components/KnowledgeBaseView'
+import { TeamsView } from './components/TeamsView'
 import { UpdateButton } from './components/UpdateButton'
 import { WindowControls } from './components/WindowControls'
 import appLogo from './assets/logo.png'
@@ -80,7 +82,7 @@ export default function App(): React.JSX.Element {
   const toasts = useToasts()
 
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
-  const [activeTab, setActiveTab] = useState<'session' | 'queue' | 'kb' | 'preview'>('session')
+  const [activeTab, setActiveTab] = useState<'session' | 'queue' | 'teams' | 'kb' | 'preview'>('session')
   const [activeTaskId, setActiveTaskId] = useState<number | null>(null)
 
   // Composer state
@@ -128,9 +130,11 @@ export default function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     const off = window.aihub?.onNavigate((route) => {
-      const [, pid, tid] = route.split('/')
+      const [kind, pid, tid] = route.split('/')
       if (pid) setSelectedProjectId(Number(pid))
-      if (tid) {
+      if (kind === 'teams') {
+        setActiveTab('teams')
+      } else if (tid) {
         setActiveTaskId(Number(tid))
         setActiveTab('session')
       }
@@ -599,6 +603,15 @@ export default function App(): React.JSX.Element {
 
                 <button
                   type="button"
+                  onClick={() => setActiveTab('teams')}
+                  data-on={activeTab === 'teams'}
+                >
+                  <Users size={13} />
+                  <span>Teams</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setActiveTab('kb')}
                   data-on={activeTab === 'kb'}
                 >
@@ -836,6 +849,20 @@ export default function App(): React.JSX.Element {
                     onAuthenticateCli={handleAuthenticateCli}
                     onRefreshClis={reloadClis}
                     onOpenSession={(taskId) => {
+                      setActiveTaskId(taskId)
+                      setActiveTab('session')
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'teams' && currentProject && (
+              <div className="flex-1 overflow-y-auto px-6 py-5">
+                <div className="mx-auto max-w-[960px]">
+                  <TeamsView
+                    project={currentProject}
+                    onOpenTask={(taskId) => {
                       setActiveTaskId(taskId)
                       setActiveTab('session')
                     }}

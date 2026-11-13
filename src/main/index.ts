@@ -10,6 +10,7 @@ import { initApprovals } from '../core/approvals'
 import { refreshGraphWatchers, stopGraphWatchers } from '../core/graphwatch'
 import { initProjects, projects, stopAllRuns } from '../core/projects'
 import { initScheduler, phoneNotify } from '../core/scheduler'
+import { initTeams, stopTeams, teams } from '../core/teams'
 import { initWorkspace } from '../core/workspace'
 import { initTerminal, stopAllTerminals } from '../core/terminal'
 import { initUpdater } from '../core/updater'
@@ -254,23 +255,21 @@ app.whenReady().then(async () => {
   initAccounts(dataDir)
   onDbChange(broadcastChanged)
 
-  initProjects(dataDir, {
-    changed: broadcastChanged,
-    notify: (title, body, route) => {
-      if (Notification.isSupported()) {
-        const n = new Notification({ title, body })
-        n.on('click', () => {
-          if (mainWindow) {
-            if (mainWindow.isMinimized()) mainWindow.restore()
-            mainWindow.focus()
-            mainWindow.webContents.send('navigate', route)
-          }
-        })
-        n.show()
-        setTimeout(() => ensureWindowsShortcut(appRoot), 300)
-      }
+  const notifyDesktop = (title: string, body: string, route: string): void => {
+    if (Notification.isSupported()) {
+      const n = new Notification({ title, body })
+      n.on('click', () => {
+        if (mainWindow) {
+          if (mainWindow.isMinimized()) mainWindow.restore()
+          mainWindow.focus()
+          mainWindow.webContents.send('navigate', route)
+        }
+      })
+      n.show()
+      setTimeout(() => ensureWindowsShortcut(appRoot), 300)
     }
-  })
+  }
+  initProjects(dataDir, { changed: broadcastChanged, notify: notifyDesktop })
 
   initWorkspace(dataDir)
   initApprovals(dataDir, (req) => {
@@ -290,7 +289,15 @@ app.whenReady().then(async () => {
     }
     phoneNotify(title, req.summary)
   })
+  initTeams(notifyDesktop)
   initScheduler((sch) => {
+    if (sch.team_id) {
+      // A team schedule hands the prompt to the team's top role; unattended, so it never waits in plan mode
+      teams
+        .startRun({ teamId: sch.team_id, projectId: sch.project_id, prompt: sch.prompt, permissionMode: sch.permission_mode === 'bypass' ? 'bypass' : 'accept-edits', checkoutMode: 'worktree' })
+        .catch((e) => phoneNotify(`Schedule "${sch.title}" could not start`, (e as Error).message))
+      return
+    }
     projects.createAndRun({
       projectId: sch.project_id,
       prompt: sch.prompt,
@@ -390,6 +397,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   stopAllRuns()
+  stopTeams()
   stopAllTerminals()
   voice.shutdown()
   stopGraphWatchers()

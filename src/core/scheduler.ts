@@ -83,7 +83,7 @@ export const schedules = {
     const next = nextRun(cfg)
     const id = s.id
       ? (run(
-          `UPDATE schedules SET title = ?, prompt = ?, cli = ?, model = ?, effort = ?, permission_mode = ?, kind = ?, time_of_day = ?, every_hours = ?, weekday = ?, enabled = ?, next_run_at = ? WHERE id = ?`,
+          `UPDATE schedules SET title = ?, prompt = ?, cli = ?, model = ?, effort = ?, permission_mode = ?, kind = ?, time_of_day = ?, every_hours = ?, weekday = ?, enabled = ?, next_run_at = ?, team_id = ? WHERE id = ?`,
           s.title.trim(),
           s.prompt.trim(),
           s.cli ?? 'claude',
@@ -96,12 +96,13 @@ export const schedules = {
           cfg.weekday,
           s.enabled ?? 1,
           next,
+          s.team_id ?? null,
           s.id
         ),
         s.id)
       : run(
-          `INSERT INTO schedules (project_id, title, prompt, cli, model, effort, permission_mode, kind, time_of_day, every_hours, weekday, enabled, next_run_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+          `INSERT INTO schedules (project_id, title, prompt, cli, model, effort, permission_mode, kind, time_of_day, every_hours, weekday, enabled, next_run_at, created_at, team_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
           s.project_id,
           s.title.trim(),
           s.prompt.trim(),
@@ -114,7 +115,8 @@ export const schedules = {
           cfg.every_hours,
           cfg.weekday,
           next,
-          nowLocal()
+          nowLocal(),
+          s.team_id ?? null
         )
     return get<Schedule>('SELECT * FROM schedules WHERE id = ?', id)!
   },

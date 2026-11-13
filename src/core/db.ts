@@ -173,6 +173,85 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   ALTER TABLE project_tasks ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0;
+  `,
+  `
+  -- Teams: a top role that hires and delegates to its own org chart (core/teams.ts)
+  CREATE TABLE IF NOT EXISTS teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    allowed_models TEXT NOT NULL DEFAULT '[]',
+    max_roles INTEGER NOT NULL DEFAULT 12,
+    max_depth INTEGER NOT NULL DEFAULT 3,
+    max_rounds INTEGER NOT NULL DEFAULT 2,
+    token_budget INTEGER NOT NULL DEFAULT 1500000,
+    report_words INTEGER NOT NULL DEFAULT 250,
+    lean INTEGER NOT NULL DEFAULT 1,
+    approve_hires INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS team_roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES team_roles(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    job TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'worker',
+    cli TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    effort TEXT NOT NULL DEFAULT 'medium',
+    command TEXT NOT NULL DEFAULT '',
+    locked INTEGER NOT NULL DEFAULT 0,
+    hired_by TEXT NOT NULL DEFAULT 'user',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_team_roles_team ON team_roles(team_id, parent_id);
+  CREATE TABLE IF NOT EXISTS team_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL,
+    prompt TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'running',
+    permission_mode TEXT NOT NULL DEFAULT 'accept-edits',
+    checkout_mode TEXT NOT NULL DEFAULT 'worktree',
+    continues_run_id INTEGER,
+    result TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    done_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_team_runs_project ON team_runs(project_id, team_id);
+  CREATE TABLE IF NOT EXISTS team_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL,
+    parent_step_id INTEGER REFERENCES team_steps(id) ON DELETE CASCADE,
+    task_id INTEGER,
+    seq INTEGER NOT NULL DEFAULT 0,
+    round INTEGER NOT NULL DEFAULT 0,
+    brief TEXT NOT NULL DEFAULT '',
+    access TEXT NOT NULL DEFAULT 'read',
+    cli TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    effort TEXT NOT NULL DEFAULT 'medium',
+    state TEXT NOT NULL DEFAULT 'pending',
+    phase TEXT NOT NULL DEFAULT '',
+    rounds INTEGER NOT NULL DEFAULT 0,
+    report TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    run_ms INTEGER NOT NULL DEFAULT 0,
+    tok_mark INTEGER NOT NULL DEFAULT 0,
+    cost_mark REAL NOT NULL DEFAULT 0,
+    ms_mark INTEGER NOT NULL DEFAULT 0,
+    plan_json TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_team_steps_run ON team_steps(run_id, parent_step_id);
+  CREATE INDEX IF NOT EXISTS idx_team_steps_task ON team_steps(task_id);
+  ALTER TABLE schedules ADD COLUMN team_id INTEGER;
   `
 ]
 

@@ -20,6 +20,7 @@ import {
   ShieldAlert,
   Trash2,
   Undo2,
+  Users,
   X
 } from 'lucide-react'
 import type { CliId, CliSubscriptionStatus, DiffHunk, McpServerEntry, MentionItem, Project, ProjectTask, Schedule } from '@shared/types'
@@ -396,6 +397,7 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export function SchedulesPanel({ project, clis, cli, model }: { project: Project; clis: CliSubscriptionStatus[]; cli: CliId; model: string }): React.JSX.Element {
   const { data: list } = useData(() => api.schedules.list(project.id), [project.id])
+  const { data: teamsList } = useData(() => api.teams.list(), [], { throttleMs: 15_000 })
   const [editing, setEditing] = useState<Partial<Schedule> | null>(null)
   const describe = (s: Schedule): string =>
     s.kind === 'hourly' ? `every ${s.every_hours}h` : s.kind === 'weekly' ? `${DAYS[s.weekday]} ${s.time_of_day}` : `daily ${s.time_of_day}`
@@ -408,34 +410,38 @@ export function SchedulesPanel({ project, clis, cli, model }: { project: Project
         <button
           type="button"
           className="btn h-7 px-2.5 text-[11.5px]"
-          onClick={() => setEditing({ project_id: project.id, title: '', prompt: '', cli, model, kind: 'daily', time_of_day: '09:00', every_hours: 6, weekday: 1, permission_mode: 'accept-edits' })}
+          onClick={() => setEditing({ project_id: project.id, title: '', prompt: '', cli, model, kind: 'daily', time_of_day: '09:00', every_hours: 6, weekday: 1, permission_mode: 'accept-edits', team_id: null })}
         >
           <Plus size={12} /> New schedule
         </button>
       </div>
       {!!list?.length && (
         <div className="card divide-y divide-white/[0.06]">
-          {list.map((s) => (
-            <div key={s.id} className={cx('flex items-center gap-3 px-4 py-2.5', !s.enabled && 'opacity-50')}>
-              <CliAvatar cli={s.cli} size={16} />
-              <button type="button" className="min-w-0 flex-1 cursor-pointer text-left" onClick={() => setEditing(s)}>
-                <div className="truncate text-[13px] font-medium text-zinc-100">{s.title}</div>
-                <div className="muted text-[11.5px]">
-                  {describe(s)}
-                  {s.next_run_at && s.enabled ? ` · next ${new Date(s.next_run_at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}
-                </div>
-              </button>
-              <button type="button" className="btn btn-ghost btn-icon h-7 w-7" title="Run now" onClick={() => act(api.schedules.runNow(s.id), 'Started')}>
-                <Play size={12} />
-              </button>
-              <button type="button" className="btn btn-ghost btn-icon h-7 w-7" title={s.enabled ? 'Pause' : 'Resume'} onClick={() => act(api.schedules.toggle(s.id))}>
-                {s.enabled ? <Pause size={12} /> : <RotateCcw size={12} />}
-              </button>
-              <button type="button" className="btn btn-ghost btn-icon btn-danger h-7 w-7" onClick={() => confirmAction(`Delete schedule "${s.title}"?`) && act(api.schedules.delete(s.id))}>
-                <Trash2 size={12} />
-              </button>
-            </div>
-          ))}
+          {list.map((s) => {
+            const team = s.team_id ? teamsList?.find((t) => t.id === s.team_id) : undefined
+            return (
+              <div key={s.id} className={cx('flex items-center gap-3 px-4 py-2.5', !s.enabled && 'opacity-50')}>
+                {s.team_id ? <Users size={15} className="shrink-0 text-indigo-300" /> : <CliAvatar cli={s.cli} size={16} />}
+                <button type="button" className="min-w-0 flex-1 cursor-pointer text-left" onClick={() => setEditing(s)}>
+                  <div className="truncate text-[13px] font-medium text-zinc-100">{s.title}</div>
+                  <div className="muted text-[11.5px]">
+                    {team ? `${team.name} · ` : ''}
+                    {describe(s)}
+                    {s.next_run_at && s.enabled ? ` · next ${new Date(s.next_run_at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}
+                  </div>
+                </button>
+                <button type="button" className="btn btn-ghost btn-icon h-7 w-7" title="Run now" onClick={() => act(api.schedules.runNow(s.id), 'Started')}>
+                  <Play size={12} />
+                </button>
+                <button type="button" className="btn btn-ghost btn-icon h-7 w-7" title={s.enabled ? 'Pause' : 'Resume'} onClick={() => act(api.schedules.toggle(s.id))}>
+                  {s.enabled ? <Pause size={12} /> : <RotateCcw size={12} />}
+                </button>
+                <button type="button" className="btn btn-ghost btn-icon btn-danger h-7 w-7" onClick={() => confirmAction(`Delete schedule "${s.title}"?`) && act(api.schedules.delete(s.id))}>
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            )
+          })}
         </div>
       )}
       {editing && (
@@ -498,33 +504,51 @@ export function SchedulesPanel({ project, clis, cli, model }: { project: Project
                 </Field>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="AI">
+            {!!teamsList?.length && (
+              <Field label="Who runs it">
                 <select
                   className="input"
-                  value={editing.cli}
-                  onChange={(e) => {
-                    const c = clis.find((x) => x.id === e.target.value)
-                    setEditing({ ...editing, cli: e.target.value as CliId, model: c?.models[0]?.id ?? '' })
-                  }}
+                  value={editing.team_id ?? ''}
+                  onChange={(e) => setEditing({ ...editing, team_id: e.target.value ? Number(e.target.value) : null })}
                 >
-                  {clis.filter((c) => c.authenticated).map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
+                  <option value="">One AI (pick below)</option>
+                  {teamsList.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      Team: {t.name}
                     </option>
                   ))}
                 </select>
               </Field>
-              <Field label="Model">
-                <select className="input" value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })}>
-                  {(clis.find((c) => c.id === editing.cli)?.models ?? []).map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
+            )}
+            {!editing.team_id && (
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="AI">
+                  <select
+                    className="input"
+                    value={editing.cli}
+                    onChange={(e) => {
+                      const c = clis.find((x) => x.id === e.target.value)
+                      setEditing({ ...editing, cli: e.target.value as CliId, model: c?.models[0]?.id ?? '' })
+                    }}
+                  >
+                    {clis.filter((c) => c.authenticated).map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Model">
+                  <select className="input" value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })}>
+                    {(clis.find((c) => c.id === editing.cli)?.models ?? []).map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+            )}
             <Field label="Permissions" hint="Scheduled runs happen while you're away — Full Auto never waits for approvals; Accept Edits will wait for command approvals.">
               <select className="input" value={editing.permission_mode} onChange={(e) => setEditing({ ...editing, permission_mode: e.target.value as Schedule['permission_mode'] })}>
                 <option value="accept-edits">Accept edits</option>

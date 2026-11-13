@@ -24,6 +24,11 @@ import type {
   Settings,
   SkillInfo,
   TaskChanges,
+  Team,
+  TeamModelOption,
+  TeamRole,
+  TeamRun,
+  TeamStep,
   TerminalOutputEvent,
   UpdateInfo
 } from '@shared/types'
@@ -100,6 +105,35 @@ export const api = {
     delete: (id: number) => call<true>('schedules.delete', id),
     runNow: (id: number) => call<true>('schedules.runNow', id),
     testPhone: () => call<true>('schedules.testPhone')
+  },
+  teams: {
+    list: () => call<Team[]>('teams.list'),
+    modelCatalog: () => call<TeamModelOption[]>('teams.modelCatalog'),
+    save: (
+      t: Partial<Omit<Team, 'allowed_models' | 'roles'>> & {
+        name: string
+        allowed_models?: string[]
+        top?: { title: string; job: string; cli: CliId; model: string; effort?: EffortLevel }
+      }
+    ) => call<Team>('teams.save', t),
+    delete: (id: number) => call<true>('teams.delete', id),
+    saveRole: (r: Partial<TeamRole> & { team_id: number; title: string }) => call<TeamRole>('teams.saveRole', r),
+    deleteRole: (id: number) => call<true>('teams.deleteRole', id),
+    runs: (projectId: number, teamId?: number) => call<TeamRun[]>('teams.runs', projectId, teamId),
+    run: (runId: number) => call<{ run: TeamRun; steps: TeamStep[] }>('teams.run', runId),
+    startRun: (o: {
+      teamId: number
+      projectId: number
+      prompt: string
+      roleId?: number | null
+      permissionMode?: PermissionMode
+      checkoutMode?: CheckoutMode
+      continuesRunId?: number | null
+    }) => call<TeamRun>('teams.startRun', o),
+    stopRun: (id: number) => call<TeamRun>('teams.stopRun', id),
+    resumeRun: (id: number) => call<TeamRun>('teams.resumeRun', id),
+    deleteRun: (id: number) => call<true>('teams.deleteRun', id),
+    decideHires: (stepId: number, approve: boolean) => call<true>('teams.decideHires', stepId, approve)
   },
   mcp: {
     list: () => call<McpServerEntry[]>('mcp.list'),

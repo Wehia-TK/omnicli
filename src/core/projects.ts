@@ -43,6 +43,17 @@ export function initProjects(dataDir: string, n: Notifier): void {
   run("UPDATE project_tasks SET run_state = 'failed', error = 'The app closed while this was running. Reply to continue it.' WHERE run_state = 'running'")
 }
 
+/**
+ * Team agents (core/teams.ts) run as hidden `kind = 'agent'` tasks: their prompts are sent verbatim, they never hand
+ * over to another CLI on their own, and the team engine is told when each turn ends instead of the user being notified.
+ */
+const leanAgents = new Set<number>()
+let agentSettled: (taskId: number, ok: boolean) => void = () => undefined
+
+export function onAgentSettled(cb: (taskId: number, ok: boolean) => void): void {
+  agentSettled = cb
+}
+
 export const runningTasksCount = (): number => running.size
 
 export function stopAllRuns(): void {
@@ -338,6 +349,7 @@ function applySkills(cli: CliId, mentionsRaw: string, prompt: string): string {
 }
 
 export function buildFullPrompt(cli: CliId, t: ProjectTask, p: Project, ask: string, cwd: string): string {
+  if (t.kind === 'agent') return ask // the team engine writes the whole prompt (role, brief, context)
   return applySkills(cli, t.mentions, buildPromptBody(cli, t, p, ask, cwd))
 }
 
@@ -470,6 +482,7 @@ function collectChangedFilePaths(t: ProjectTask): string[] {
 
 function finishRun(t: ProjectTask, p: Project, cli: CliId, model: string): void {
   run("UPDATE project_tasks SET run_state = 'waiting' WHERE id = ?", t.id)
+  if (t.kind === 'agent') return agentSettled(t.id, true)
   const changedFiles = collectChangedFilePaths(t)
   recordAiHandoff(p.id, cli, model, t.title, t.result || 'Completed run', changedFiles)
   const checked = t.check_state === 'passed' ? ' Checks passed.' : ''
@@ -513,6 +526,7 @@ function finishRun(t: ProjectTask, p: Project, cli: CliId, model: string): void 
 function failRun(t: ProjectTask, p: Project, why: string): void {
   run("UPDATE project_tasks SET run_state = 'failed', error = ? WHERE id = ?", why, t.id)
   appendLog(t.id, 'error', why, (t.runner || undefined) as CliId | undefined, t.model)
+  if (t.kind === 'agent') return agentSettled(t.id, false)
   notifier.notify(`${p.name}: stopped`, `${t.title}\n${why.slice(0, 140)}`, `projects/${p.id}/${t.id}`)
   phoneNotify(`${p.name}: stopped`, `${t.title}\n${why.slice(0, 300)}`)
   nextInQueue(p.id)
@@ -600,8 +614,15 @@ function launchClaude(startTask: ProjectTask, p: Project, ask: string, firstWhy:
           ? 'acceptEdits'
           : 'default'
 
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', permMode]
-  if (permMode === 'default' || permMode === 'acceptEdits') {
+  // Team agents: a read-only role (manager, or a worker without write access) gets only the read tools, so there is
+  // nothing to approve; no agent may start its own sub-agents; lean agents skip MCP servers and the skills listing.
+  const isAgent = t.kind === 'agent'
+  const readOnlyAgent = isAgent && t.permission_mode === 'plan'
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', readOnlyAgent ? 'acceptEdits' : permMode]
+  if (readOnlyAgent) args.push('--tools', 'Read,Grep,Glob,WebSearch,WebFetch')
+  else if (isAgent) args.push('--disallowedTools', 'Agent,Task')
+  if (isAgent && leanAgents.has(t.id)) args.push('--strict-mcp-config', '--disable-slash-commands')
+  if (!readOnlyAgent && (permMode === 'default' || permMode === 'acceptEdits')) {
     const cfg = approvalMcpConfig(t.id)
     if (cfg) args.push('--mcp-config', cfg, '--permission-prompt-tool', 'mcp__aihub__approve')
     else if (permMode === 'default') args[args.indexOf('default')] = 'acceptEdits' // bridge unavailable: old behaviour
@@ -845,7 +866,7 @@ function launchCliProcess(cli: CliId, startTask: ProjectTask, p: Project, ask: s
   }
 
   let baseModel = resolveModelFor(cli, t, p)
-  if (cli === 'agy' && getSettings().agyFamilyFallback && agyModelExhausted(baseModel)) {
+  if (cli === 'agy' && t.kind !== 'agent' && getSettings().agyFamilyFallback && agyModelExhausted(baseModel)) {
     const alt = pickAgyAlternative(baseModel, new Set([baseModel]))
     if (alt) {
       appendLog(t.id, 'handoff', `${baseModel} has no quota left right now — using ${alt} from another Antigravity quota group.`, 'agy', alt)
@@ -1164,6 +1185,8 @@ function handleStoppedRun(from: CliId, t: ProjectTask, p: Project, ask: string, 
       return
     }
   }
+  // A team agent never changes model or provider by itself: its manager picked that model, and decides what to do next
+  if (t.kind === 'agent') return failRun(t, p, why)
   // Antigravity meters model groups separately — a different group may still have quota, so try that first
   if (from === 'agy' && getSettings().agyFamilyFallback && turnedDownByLimit(false, why)) {
     const tried = agyTried.get(t.id) ?? new Set<string>()
@@ -1211,6 +1234,58 @@ function handOverToOtherCli(from: CliId, t: ProjectTask, p: Project, ask: string
     `projects/${p.id}/${t.id}`
   )
   executeWithCli(to, t, p, ask, why)
+}
+
+/**
+ * Create the hidden task that holds one team role's CLI session and log. `shareWith` makes it work in another
+ * agent's checkout (same folder, worktree and branch), so a whole team run lands on one branch.
+ */
+export function createAgentTask(o: {
+  projectId: number
+  title: string
+  cli: CliId
+  model: string
+  effort: EffortLevel
+  permissionMode: PermissionMode
+  checkoutMode: CheckoutMode
+  shareWith?: number | null
+}): ProjectTask {
+  const p = getProject(o.projectId)
+  const id = run(
+    `INSERT INTO project_tasks
+     (project_id, kind, title, notes, status, sort, created_at, cli, model, effort, permission_mode, checkout_mode, mentions)
+     VALUES (?, 'agent', ?, '', 'doing', 0, ?, ?, ?, ?, ?, ?, '[]')`,
+    p.id,
+    o.title.replace(/\s+/g, ' ').slice(0, 110) || 'Team agent',
+    nowLocal(),
+    o.cli,
+    o.model,
+    o.effort,
+    o.permissionMode,
+    o.checkoutMode
+  )
+  if (o.shareWith) {
+    const s = getTask(o.shareWith)
+    run('UPDATE project_tasks SET checkout_mode = ?, worktree = ?, branch = ?, base_commit = ? WHERE id = ?', s.checkout_mode, s.worktree, s.branch, s.base_commit, id)
+  }
+  return getTask(id)
+}
+
+/** Send one turn to a team agent. The outcome arrives through `onAgentSettled`, also when the launch itself fails. */
+export function runAgentTurn(
+  id: number,
+  prompt: string,
+  o: { cli: CliId; model: string; effort: EffortLevel; permissionMode: PermissionMode; lean: boolean }
+): void {
+  if (running.has(id)) throw new Error('That agent is still working on its previous turn')
+  const p = getProject(getTask(id).project_id)
+  if (!p.folder) throw new Error(`Set a folder for ${p.name} first so the team knows where to work`)
+  checkFolder(p.folder)
+  run("UPDATE project_tasks SET cli = ?, model = ?, effort = ?, permission_mode = ?, status = 'doing' WHERE id = ?", o.cli, o.model, o.effort, o.permissionMode, id)
+  if (o.lean) leanAgents.add(id)
+  else leanAgents.delete(id)
+  appendLog(id, 'you', prompt, o.cli, `${o.model} (${o.effort})`)
+  executeWithCli(o.cli, getTask(id), p, prompt)
 }
 
 export interface CreateRunOpts {
@@ -1679,6 +1754,7 @@ export const projects = {
     cancelApprovals(id)
     if (child) killProcess(child)
     appendLog(id, 'info', 'Stopped by user')
+    if (getTask(id).kind === 'agent') agentSettled(id, false) // the close handler stays silent after a manual stop
     return getTask(id)
   },
 

@@ -100,7 +100,17 @@ Instead of wrestling with scattered terminals, hidden rate limits, and disjointe
 - Skeleton placeholders for the subscription strip, projects, sessions, the live stream, git changes, and the knowledge base while they first load.
 - Automated scheduled runs (hourly, daily, weekly) for recurring audits, tests, or repo maintenance.
 
-### 6. 🔌 MCP & Skills Integration
+### 6. 👥 Cost-Aware AI Teams (Hierarchical Multi-Agent Orchestration)
+- **Define only the top role**: create a single lead role (such as a CTO or Engineering Lead) on a strong reasoning model. The first time a task needs specialists, it hires its own direct reports (`worker`, `manager`, or zero-token `script` roles) and reuses that org chart on future runs.
+- **Built to keep token use low**:
+  - **App-driven orchestration**: Omni CLI—not a chatty multi-agent loop—runs the step tree, so managers only take a short planning turn and a review turn per round.
+  - **Cheapest model that fits**: managers receive a relative cost price sheet of your signed-in models and assign routine work (search, boilerplate, tests, small edits) to cheap tiers (Haiku / Flash / Mini) while keeping expensive models for hard design or review steps. Fable models are excluded.
+  - **Capped reports & lean agents**: managers only read word-capped summaries (`report_words`) rather than sub-agent transcripts, and Claude Code team agents start in lean mode (`--strict-mcp-config --disable-slash-commands`) to avoid paying for large tool/skill schemas on every worker turn.
+  - **Zero-token script roles**: add command roles (e.g. `npm run check`) that managers can trigger for verification without spending a single token.
+  - **Hard guardrails**: configurable team size limit, org-chart depth limit, rework round cap, cost-weighted token budget per run, optional user approval before a manager hires, and live cost-weighted savings compared against running every step on the top role's model.
+- **Shared branch & full resumability**: every step in a run shares the top role's git worktree branch, can be stopped and resumed from SQLite state, supports follow-up runs on the same branch, and can be triggered from **Scheduled tasks**.
+
+### 7. 🔌 MCP & Skills Integration
 - Unified Model Context Protocol (MCP) server management across supported CLIs.
 - Discovers user and project-scoped `SKILL.md` workflows.
 - Extensible notifications (support for `ntfy.sh` mobile/desktop push alerts).
@@ -118,6 +128,8 @@ Omni CLI (Electron App)
 ├── Core Engine (src/core/)
 │   ├── clis.ts         - CLI detection, quota polling, token calculations
 │   ├── projects.ts     - Workspace execution, git worktrees, task runner
+│   ├── teams.ts        - Hierarchical multi-agent teams, step-tree runner & cost budgets
+│   ├── teamplan.ts     - Pure model cost weights, delegation plan parser & role prompts
 │   ├── knowledge.ts    - Markdown & SQLite synchronization (.ai-kb)
 │   ├── gitops.ts       - Asynchronous Git status, diffs, branches, and worktrees
 │   ├── terminal.ts     - Node-pty session lifecycle management

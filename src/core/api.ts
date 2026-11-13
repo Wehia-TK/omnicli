@@ -9,6 +9,7 @@ import { projects } from './projects'
 import { schedules } from './scheduler'
 import { getSettings, updateSettings } from './settings'
 import { skills } from './skills'
+import { teams } from './teams'
 import { terminal } from './terminal'
 import { updater } from './updater'
 import { voice } from './voice'
@@ -29,6 +30,7 @@ export const coreApi = {
   github,
   review,
   schedules,
+  teams,
   mcp,
   git: gitops,
   updates: updater,
